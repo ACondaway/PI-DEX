@@ -1,0 +1,38 @@
+[project]
+name = "pi-dex"
+version = "0.1.0"
+description = "PI-DEX research extensions for bimanual dexterous manipulation"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.22.4,<2.0.0",
+]
+
+[project.optional-dependencies]
+pytorch = [
+    "torch==2.7.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.4",
+    "ruff>=0.8.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pi_dex"]
+
+[tool.pytest.ini_options]
+markers = ["manual: should be run manually."]
+testpaths = ["tests"]
+
+[tool.ruff]
+extend = "openpi/pyproject.toml"
+extend-exclude = ["openpi"]
+
+[tool.ruff.lint.per-file-ignores]
+# Keep the core package importable without the vendored OpenPI/JAX training stack.
+"src/pi_dex/openpi_integration.py" = ["PLC0415"]

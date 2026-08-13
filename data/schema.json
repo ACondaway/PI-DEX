@@ -1,0 +1,261 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sharpa.ai/schemas/sharpa-open-data/episode/v0.3.0",
+  "title": "SharpaOpenData Episode Schema",
+  "description": "Describes the on-disk format of a SINGLE episode of the SharpaOpenData dataset stored at /mnt/netdata/Team/Academic/Data/North/SharpaOpenData. An episode is one directory containing exactly one HDF5 file (all robot sensor / actuator time series) plus JSON sidecar files (human annotations and provenance). This document is descriptive: it is a JSON-Schema-flavoured spec of the directory, the HDF5 tree and the sidecar JSON files. It was derived by inspecting the actual data (56 task collections, ~30k episodes, 50 tasks structurally sampled).",
+  "version": "0.3.0",
+
+  "dataset_layout": {
+    "description": "Directory hierarchy above a single episode. Most tasks use 3 levels; the `easy10` collection inserts an extra sub-task level.",
+    "standard": "<DATASET_ROOT>/<task_name>/season_<ROBOT_ID>_<YYYY_MM_DD_HH_MM_SS>_<split>/<ROBOT_ID>_<YYYY_MM_DD_HH_MM_SS>_<split>/",
+    "nested_variant": "<DATASET_ROOT>/easy10/<subtask_name>/season_<...>/<ROBOT_ID>_<...>/",
+    "example": "SharpaOpenData/ClearPlate/season_POC22027_2026_04_18_10_54_31_train/POC22027_2026_04_18_11_21_33_train/",
+    "notes": [
+      "`ROBOT_ID` (e.g. POC22027, POC22007, POC22054) identifies the physical robot / collection station.",
+      "A `season_*` directory groups all episodes recorded in one continuous collection session. Its timestamp equals the timestamp of its first episode.",
+      "`split` is currently always `train`.",
+      "The season directory also contains a `train.json` manifest and, usually, a `lerobotv2.1_clean/` LeRobot v2.1 export of the same episodes. See `sibling_artifacts` below."
+    ]
+  },
+
+  "type": "object",
+  "title_of_unit": "episode directory",
+  "required": ["<basic_tag>@<timestamp>.hdf5", "clip_tags.json", "reasoning.json"],
+  "properties": {
+
+    "<basic_tag>@<timestamp>.hdf5": {
+      "description": "The episode payload. Filename pattern `train_0.3.0@YYYY_MM_DD_HH_MM_SS.hdf5`, where `train_0.3.0` is the SDK/basic tag and the timestamp matches the parent episode directory. Exactly one per episode.",
+      "type": "hdf5_file",
+      "file_attrs": {},
+
+      "temporal_model": {
+        "description": "Every dataset in the file is a time series whose FIRST axis is time. There are exactly two clock rates, and understanding the distinction is essential.",
+        "aligned_rate": {
+          "symbol": "N",
+          "fps": 30,
+          "measured_fps": "29.6 - 29.8",
+          "description": "The canonical episode timeline, locked to the head-camera shutter. ALL `observe/**` datasets and ALL `mode/**` datasets have first dimension N. Every `startStep`/`endStep`/`start`/`end` index appearing in the JSON sidecars is an index into this timeline, inclusive on both ends, valid in [0, N-1].",
+          "how_to_get_N": "f['observe/vision/head/stereo/lefteye/time'].shape[0]",
+          "observed_range": "323 - 3199 frames (~11 s - ~107 s)"
+        },
+        "raw_rate": {
+          "symbol": "M",
+          "fps": 60,
+          "measured_fps": "59.3 - 59.5",
+          "relation": "M == 2 * N (verified exactly on all sampled episodes; may be off by one on rare episodes)",
+          "description": "The proprioception control loop rate. ALL `state/**` and `action/**` value datasets (`joint_angle`, `joint_effort`, `tcp_pose`, `velocity`, ...) have first dimension M, i.e. they are recorded at double the video rate.",
+          "how_to_get_M": "f['state/left_arm/time'].shape[0]"
+        },
+        "aligned_index": {
+          "path_pattern": "state/<part>/aligned_index and action/<part>/aligned_index",
+          "shape": ["N"],
+          "dtype": "int32",
+          "description": "The bridge between the two rates: `aligned_index[k]` is the row in the 60 Hz arrays of the same group that corresponds to aligned frame `k`. Monotonically non-decreasing; in practice `aligned_index[k] == 2*k`. To build a 30 Hz-synchronised training sample at frame k, index images/tactile/mode directly with `k`, and index proprioception with `aligned_index[k]`.",
+          "usage_example": "q = f['state/left_arm/joint_angle'][ f['state/left_arm/aligned_index'][k] ]"
+        },
+        "time": {
+          "path_pattern": "**/time  and  **/raw_time",
+          "shape": ["<N or M>", 2],
+          "dtype": "float64",
+          "columns": [
+            {"index": 0, "name": "timestamp", "unit": "seconds", "description": "Absolute UNIX wall-clock timestamp (e.g. 1776482492.xx). This is the only column carrying information."},
+            {"index": 1, "name": "valid", "description": "Observed to be constant 1.0 across every `time` dataset in every sampled episode. Treat as a validity flag and ignore."}
+          ],
+          "raw_time_note": "`raw_time` (present on `mode`, `state/chassis`, `action/chassis`, `observe/imu`) is the pre-synchronisation sensor timestamp; `time` is the post-synchronisation timestamp. Prefer `time`."
+        }
+      },
+
+      "embodiment": {
+        "description": "A stationary/wheeled bimanual humanoid with two 7-DoF arms, two 22-DoF dexterous hands, a 7-DoF auxiliary `motor` chain, an optional 2-DoF chassis, 4 RGB cameras and 10 fingertip tactile sensors. The DoF counts are identical across all 50 structurally sampled tasks.",
+        "left_arm": {"dof": 7, "joint_names": ["left_arm_j0", "left_arm_j1", "left_arm_j2", "left_arm_j3", "left_arm_j4", "left_arm_j5", "left_arm_j6"]},
+        "right_arm": {"dof": 7, "joint_names": ["right_arm_j0", "...", "right_arm_j6"]},
+        "left_hand": {"dof": 22, "joint_names": ["left_hand_j0", "...", "left_hand_j21"]},
+        "right_hand": {"dof": 22, "joint_names": ["right_hand_j0", "...", "right_hand_j21"]},
+        "motor": {"dof": 7, "joint_names": ["motor_j0", "...", "motor_j6"], "description": "Auxiliary body chain (head / neck / torso actuators). Named only positionally in the official LeRobot export."},
+        "chassis": {"dof": 2, "description": "Mobile base, [linear, angular] velocity. Optional and usually all-zero for tabletop tasks.", "units": "m/s and rad/s"},
+        "joint_units": "radians for all `joint_angle` datasets",
+        "name_source": "Joint naming taken verbatim from the sibling LeRobot export `lerobotv2.1_clean/meta/info.json`, whose 65-D `observation.state` vector is the concatenation [left_arm(7), left_hand(22), right_arm(7), right_hand(22), motor(7)]."
+      },
+
+      "groups": {
+
+        "state": {
+          "description": "Measured proprioception (what the robot actually did). Sampled at 60 Hz -> first dim M.",
+          "children": {
+            "left_arm | right_arm": {
+              "required": true,
+              "datasets": {
+                "joint_angle":   {"shape": ["M", 7], "dtype": "float32", "unit": "rad",   "required": true,  "description": "Measured arm joint positions."},
+                "joint_effort":  {"shape": ["M", 7], "dtype": "float32", "unit": "Nm",    "required": false, "presence": "49/50 tasks", "description": "Measured joint torque."},
+                "joint_current": {"shape": ["M", 7], "dtype": "float32", "unit": "A",     "required": false, "presence": "38/50 tasks", "description": "Measured joint motor current."},
+                "tcp_pose":      {"shape": ["M", 6], "dtype": "float32", "required": false, "presence": "49/50 tasks", "description": "End-effector pose [x, y, z, rx, ry, rz] (position in m, rotation as rotation-vector/Euler in rad). NOTE: observed to be all-zero on some collections (e.g. ClearPlate) - always check for a non-zero norm before using."},
+                "tcp_force":     {"shape": ["M", 6], "dtype": "float32", "required": false, "presence": "38/50 tasks", "description": "End-effector wrench [fx, fy, fz, tx, ty, tz]."},
+                "tcp_forces":    {"shape": ["M", 6], "dtype": "float32", "required": false, "presence": "11/50 tasks", "description": "IDENTICAL SEMANTICS to `tcp_force`; older collections use the plural spelling. A reader MUST accept either name: `g.get('tcp_force', g.get('tcp_forces'))`. The two never co-occur."},
+                "time":          {"shape": ["M", 2], "dtype": "float64", "required": true},
+                "aligned_index": {"shape": ["N"],    "dtype": "int32",   "required": true}
+              }
+            },
+            "left_hand | right_hand": {
+              "required": true,
+              "datasets": {
+                "joint_angle":   {"shape": ["M", 22], "dtype": "float32", "unit": "rad",    "required": true},
+                "velocity":      {"shape": ["M", 22], "dtype": "float32", "unit": "rad/s",  "required": false, "presence": "49/50 tasks"},
+                "torque":        {"shape": ["M", 22], "dtype": "float32", "unit": "Nm",     "required": false, "presence": "49/50 tasks"},
+                "time":          {"shape": ["M", 2],  "dtype": "float64", "required": true},
+                "aligned_index": {"shape": ["N"],     "dtype": "int32",   "required": true}
+              }
+            },
+            "motor": {
+              "required": true,
+              "datasets": {
+                "joint_angle":   {"shape": ["M", 7], "dtype": "float32", "unit": "rad", "required": true},
+                "time":          {"shape": ["M", 2], "dtype": "float64", "required": true},
+                "aligned_index": {"shape": ["N"],    "dtype": "int32",   "required": true}
+              }
+            },
+            "chassis": {
+              "required": false,
+              "presence": "40/50 tasks",
+              "datasets": {
+                "velocity":      {"shape": ["M", 2], "dtype": "float32", "description": "[linear, angular]. One sampled task uses 3 components. Typically all-zero for stationary tabletop tasks."},
+                "time":          {"shape": ["M", 2], "dtype": "float64"},
+                "raw_time":      {"shape": ["M", 2], "dtype": "float64"},
+                "aligned_index": {"shape": ["N"],    "dtype": "int32"}
+              }
+            }
+          }
+        },
+
+        "action": {
+          "description": "Commanded targets (what the teleoperator/controller asked for). Same 60 Hz timeline and same layout as `state`, but only positional commands are recorded. This is the supervision signal for behaviour cloning.",
+          "children": {
+            "left_arm | right_arm": {
+              "required": true,
+              "datasets": {
+                "joint_angle":   {"shape": ["M", 7], "dtype": "float32", "unit": "rad", "required": true, "description": "Commanded arm joint positions."},
+                "time":          {"shape": ["M", 2], "dtype": "float64", "required": true},
+                "aligned_index": {"shape": ["N"],    "dtype": "int32",   "required": true}
+              }
+            },
+            "left_hand | right_hand": {
+              "required": true,
+              "datasets": {
+                "joint_angle":   {"shape": ["M", 22], "dtype": "float32", "unit": "rad", "required": true},
+                "time":          {"shape": ["M", 2],  "dtype": "float64", "required": true},
+                "aligned_index": {"shape": ["N"],     "dtype": "int32",   "required": true}
+              }
+            },
+            "motor": {
+              "required": true,
+              "datasets": {
+                "joint_angle":   {"shape": ["M", 7], "dtype": "float32", "unit": "rad", "required": true},
+                "time":          {"shape": ["M", 2], "dtype": "float64", "required": true},
+                "aligned_index": {"shape": ["N"],    "dtype": "int32",   "required": true}
+              }
+            },
+            "chassis": {
+              "required": false,
+              "presence": "29/50 tasks",
+              "datasets": {
+                "velocity":      {"shape": ["M", 2], "dtype": "float32"},
+                "time":          {"shape": ["M", 2], "dtype": "float64"},
+                "raw_time":      {"shape": ["M", 2], "dtype": "float64"},
+                "aligned_index": {"shape": ["N"],    "dtype": "int32"}
+              }
+            }
+          }
+        },
+
+        "observe": {
+          "description": "Exteroception. Everything here is on the 30 Hz aligned timeline -> first dim N.",
+          "children": {
+
+            "vision": {
+              "description": "Four RGB streams. Each stream is a group with a `rgb` blob dataset and a `time` dataset. There are NO depth streams in this dataset.",
+              "encoding": {
+                "description": "CRITICAL: `rgb` is NOT a decoded image array. It is a 2-D uint8 matrix of shape (N, PAD) holding one ZERO-PADDED JPEG bytestream per row, where PAD is the largest JPEG in that episode/stream. Row length is constant; actual payload length varies per frame.",
+                "decode_recipe": "buf = rgb[k].tobytes(); buf = buf[:buf.rfind(b'\\xff\\xd9') + 2]; img = PIL.Image.open(io.BytesIO(buf))",
+                "decode_note": "Trim at the JPEG EOI marker `FFD9` rather than trimming trailing zeros, since valid JPEG data can contain 0x00 bytes."
+              },
+              "streams": {
+                "head/stereo/lefteye": {
+                  "required": true,
+                  "resolution": "1920 x 1536 (W x H), RGB",
+                  "datasets": {
+                    "rgb":  {"shape": ["N", "PAD"], "dtype": "uint8", "attrs": {
+                      "jpeg_deep_encoded": {"type": "bool", "always": true, "description": "Marks the row as a padded JPEG bytestream."},
+                      "crop_roi": {"type": "int array[4]", "example": [289, 311, 1348, 919], "description": "Region of interest within the frame recommended by the collection pipeline. Advisory metadata; the stored JPEG is the FULL uncropped frame."},
+                      "jpeg_quality": {"type": "int", "required": false, "presence": "27/50 tasks", "description": "JPEG quality factor used at encode time."}
+                    }},
+                    "time": {"shape": ["N", 2], "dtype": "float64", "description": "This stream's `time[:,0]` defines the canonical episode timeline."}
+                  }
+                },
+                "head/stereo/righteye": {
+                  "required": true,
+                  "resolution": "1920 x 1536 (W x H), RGB",
+                  "description": "Second eye of the head stereo pair. Same encoding; `crop_roi` present on only some collections (30/50).",
+                  "datasets": {
+                    "rgb":  {"shape": ["N", "PAD"], "dtype": "uint8", "attrs": {"jpeg_deep_encoded": true, "crop_roi": "optional", "jpeg_quality": "optional"}},
+                    "time": {"shape": ["N", 2], "dtype": "float64"}
+                  }
+                },
+                "left_wrist/fisheye | right_wrist/fisheye": {
+                  "required": true,
+                  "resolution": "480 x 384 (W x H), RGB",
+                  "description": "Wrist-mounted fisheye cameras, downscaled at write time.",
+                  "datasets": {
+                    "rgb":  {"shape": ["N", "PAD"], "dtype": "uint8", "attrs": {
+                      "resized": {"type": "bool", "always": true},
+                      "resize_width":  {"type": "int", "required": false, "presence": "27/50 tasks"},
+                      "resize_height": {"type": "int", "required": false, "presence": "27/50 tasks"},
+                      "jpeg_quality":  {"type": "int", "required": false, "presence": "27/50 tasks"}
+                    }},
+                    "time": {"shape": ["N", 2], "dtype": "float64"}
+                  }
+                }
+              }
+            },
+
+            "tactile": {
+              "description": "Ten vision-based fingertip tactile sensors, one group per finger. Always present in full (10/10 fingers, 50/50 tasks).",
+              "fingers": ["left_thumb", "left_index", "left_middle", "left_ring", "left_little", "right_thumb", "right_index", "right_middle", "right_ring", "right_little"],
+              "datasets_per_finger": {
+                "force":  {"shape": ["N", 3], "dtype": "float32", "unit": "N",  "required": true, "description": "Resultant contact force [fx, fy, fz] at the fingertip."},
+                "torque": {"shape": ["N", 3], "dtype": "float32", "unit": "Nm", "required": true, "description": "Resultant contact torque [tx, ty, tz] at the fingertip."},
+                "raw":    {"shape": ["N", "PAD"], "dtype": "uint8", "required": true, "description": "Raw tactile sensor camera image, 320 x 240 GRAYSCALE, stored as a zero-padded JPEG bytestream (same decode recipe as `vision/**/rgb`)."},
+                "deform": {"shape": ["N", "PAD"], "dtype": "uint8", "required": true, "description": "Derived gel-deformation / contact map, 240 x 240 GRAYSCALE, stored as a zero-padded JPEG bytestream. Much smaller than `raw` (~1 KB vs ~20 KB per frame); near-uniform when the finger is not in contact."},
+                "time":   {"shape": ["N", 2], "dtype": "float64", "required": true}
+              }
+            },
+
+            "imu": {
+              "required": false,
+              "presence": "2/50 tasks - rare, do not depend on it",
+              "path": "observe/imu/data",
+              "datasets": {
+                "orientation":         {"shape": ["N", 4], "dtype": "float32", "description": "Quaternion."},
+                "aligned_orientation": {"shape": ["N", 4], "dtype": "float32", "description": "Quaternion re-referenced to the episode start frame."},
+                "angular_velocity":    {"shape": ["N", 3], "dtype": "float32", "unit": "rad/s"},
+                "linear_acceleration": {"shape": ["N", 3], "dtype": "float32", "unit": "m/s^2"},
+                "time":                {"shape": ["N", 2], "dtype": "float64"},
+                "raw_time":            {"shape": ["N", 2], "dtype": "float64"}
+              }
+            }
+          }
+        },
+
+        "mode": {
+          "description": "Per-frame robot operating mode on the 30 Hz aligned timeline. Present in 49/50 tasks.",
+          "required": false,
+          "datasets": {
+            "operation_mode": {"shape": ["N"], "dtype": "int8", "description": "Control mode of the session. Observed constant 0 across every sampled episode (teleoperation)."},
+            "state":          {"shape": ["N"], "dtype": "int8", "description": "Top-level robot state. Observed constant 2 across every sampled episode (recording/running)."},
+            "sub_state":      {"shape": ["N"], "dtype": "int8", "description": "Phase within the episode. VERIFIED to correspond exactly to the annotation segments: 1 = task execution (frame-for-frame identical to the `valid` segment in anno.json), 2 = homing / return-to-rest (frame-for-frame identical to the `home` segment). Filtering to `sub_state == 1` is an annotation-free way to drop the trailing homing motion.", "values": {"1": "task execution (valid)", "2": "homing"}},
+            "time":           {"shape": ["N", 2], "dtype": "float64"},
+            "raw_time":       {"shape": ["N", 2], "dtype": "float64"}
+          }
+        }
+      }
+    }
+  }
+}
