@@ -1,16 +1,17 @@
-import dataclasses
 import types
 
 import pytest
 
 torch = pytest.importorskip("torch")
 
+from pi_dex.actions import ActionRepresentation  # noqa: E402
 from pi_dex.pytorch_training import PiDexPytorchTrainer  # noqa: E402
 from pi_dex.pytorch_training import compute_semantic_flow_matching_loss  # noqa: E402
 from pi_dex.pytorch_training import neutralize_model_padding  # noqa: E402
 from pi_dex.pytorch_training import neutralize_openpi_dense_action_io  # noqa: E402
 from pi_dex.pytorch_training import reduce_semantic_action_loss  # noqa: E402
 from pi_dex.spec import BimanualActionSpec  # noqa: E402
+from tests.helpers import spec_for_representation  # noqa: E402
 
 
 class FakePi05(torch.nn.Module):
@@ -57,23 +58,45 @@ class FakeNonfiniteGradientPi05(FakePi05):
         return torch.ones_like(actions) * NonfiniteGradient.apply(self.scale)
 
 
-def test_reduce_semantic_loss_excludes_padding_dimension() -> None:
+@pytest.mark.parametrize(
+    "representation",
+    [ActionRepresentation.CARTESIAN_31D, ActionRepresentation.JOINT_29D],
+)
+def test_reduce_semantic_loss_excludes_padding_dimensions(
+    action_spec: BimanualActionSpec,
+    representation: ActionRepresentation,
+) -> None:
+    action_spec = spec_for_representation(action_spec, representation)
     elementwise_loss = torch.ones((2, 4, 32), dtype=torch.float32)
-    elementwise_loss[..., -1] = 1_000_000.0
+    elementwise_loss[..., action_spec.logical_action_dim :] = 1_000_000.0
 
-    loss = reduce_semantic_action_loss(elementwise_loss)
+    loss = reduce_semantic_action_loss(elementwise_loss, action_spec)
 
     torch.testing.assert_close(loss, torch.tensor(1.0))
 
 
-def test_neutralize_padding_does_not_mutate_input() -> None:
+@pytest.mark.parametrize(
+    "representation",
+    [ActionRepresentation.CARTESIAN_31D, ActionRepresentation.JOINT_29D],
+)
+def test_neutralize_padding_does_not_mutate_input(
+    action_spec: BimanualActionSpec,
+    representation: ActionRepresentation,
+) -> None:
+    action_spec = spec_for_representation(action_spec, representation)
     values = torch.ones((2, 4, 32), dtype=torch.float32)
 
-    neutralized = neutralize_model_padding(values)
+    neutralized = neutralize_model_padding(values, action_spec)
 
-    torch.testing.assert_close(values[..., -1], torch.ones((2, 4)))
-    torch.testing.assert_close(neutralized[..., :-1], values[..., :-1])
-    torch.testing.assert_close(neutralized[..., -1], torch.zeros((2, 4)))
+    torch.testing.assert_close(values, torch.ones_like(values))
+    torch.testing.assert_close(
+        neutralized[..., : action_spec.logical_action_dim],
+        values[..., : action_spec.logical_action_dim],
+    )
+    torch.testing.assert_close(
+        neutralized[..., action_spec.logical_action_dim :],
+        torch.zeros_like(neutralized[..., action_spec.logical_action_dim :]),
+    )
 
 
 def test_compute_flow_loss_neutralizes_action_and_noise_padding(action_spec: BimanualActionSpec) -> None:
@@ -88,6 +111,22 @@ def test_compute_flow_loss_neutralizes_action_and_noise_padding(action_spec: Bim
     torch.testing.assert_close(model.forwarded_noise[..., -1], torch.zeros((2, 4)))
     torch.testing.assert_close(actions[..., -1], torch.ones((2, 4)))
     torch.testing.assert_close(noise[..., -1], torch.full((2, 4), 3.0))
+
+
+def test_joint_flow_loss_neutralizes_all_three_padding_dimensions(
+    action_spec: BimanualActionSpec,
+) -> None:
+    joint_spec = spec_for_representation(action_spec, ActionRepresentation.JOINT_29D)
+    model = FakePi05()
+    actions = torch.ones((2, 4, 32), dtype=torch.float32)
+    noise = torch.full_like(actions, 3.0)
+
+    compute_semantic_flow_matching_loss(model, object(), actions, joint_spec, noise=noise)
+
+    torch.testing.assert_close(model.forwarded_actions[..., :29], torch.ones((2, 4, 29)))
+    torch.testing.assert_close(model.forwarded_actions[..., 29:], torch.zeros((2, 4, 3)))
+    torch.testing.assert_close(model.forwarded_noise[..., :29], torch.full((2, 4, 29), 3.0))
+    torch.testing.assert_close(model.forwarded_noise[..., 29:], torch.zeros((2, 4, 3)))
 
 
 def test_neutralize_openpi_dense_action_io_zeros_only_padding_parameters(
@@ -113,6 +152,30 @@ def test_neutralize_openpi_dense_action_io_zeros_only_padding_parameters(
     torch.testing.assert_close(model.action_in_proj.weight[:, -1], torch.zeros((8,)))
     torch.testing.assert_close(model.action_out_proj.weight[-1], torch.zeros((8,)))
     torch.testing.assert_close(model.action_out_proj.bias[-1], torch.tensor(0.0))
+
+
+def test_neutralize_openpi_dense_action_io_zeros_joint_padding_parameters(
+    action_spec: BimanualActionSpec,
+) -> None:
+    class FakeProjectionModel(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.config = FakePi05().config
+            self.action_in_proj = torch.nn.Linear(32, 8)
+            self.action_out_proj = torch.nn.Linear(8, 32)
+
+    joint_spec = spec_for_representation(action_spec, ActionRepresentation.JOINT_29D)
+    model = FakeProjectionModel()
+    input_semantic = model.action_in_proj.weight[:, :29].detach().clone()
+    output_semantic = model.action_out_proj.weight[:29].detach().clone()
+
+    neutralize_openpi_dense_action_io(model, joint_spec)
+
+    torch.testing.assert_close(model.action_in_proj.weight[:, :29], input_semantic)
+    torch.testing.assert_close(model.action_out_proj.weight[:29], output_semantic)
+    torch.testing.assert_close(model.action_in_proj.weight[:, 29:], torch.zeros((8, 3)))
+    torch.testing.assert_close(model.action_out_proj.weight[29:], torch.zeros((3, 8)))
+    torch.testing.assert_close(model.action_out_proj.bias[29:], torch.zeros((3,)))
 
 
 def test_compute_flow_loss_rejects_model_output_dtype(action_spec: BimanualActionSpec) -> None:

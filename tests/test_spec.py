@@ -4,14 +4,33 @@ import types
 
 import pytest
 
+from pi_dex.actions import MODEL_ACTION_DIM
+from pi_dex.actions import ActionRepresentation
+from pi_dex.actions import valid_action_mask
 from pi_dex.spec import ACTION_LAYOUT_VERSION
 from pi_dex.spec import ACTION_METADATA_SCHEMA_VERSION
 from pi_dex.spec import BimanualActionSpec
+from tests.helpers import spec_for_representation
 
 
 def test_spec_derives_even_model_horizon(action_spec: BimanualActionSpec) -> None:
     assert action_spec.physical_horizon == 2
     assert action_spec.model_action_horizon == 4
+
+
+@pytest.mark.parametrize("representation", list(ActionRepresentation))
+def test_spec_derives_representation_contract(
+    action_spec: BimanualActionSpec,
+    representation: ActionRepresentation,
+) -> None:
+    spec = spec_for_representation(action_spec, representation)
+
+    assert spec.logical_action_dim == representation.logical_action_dim
+    assert spec.valid_action_mask == valid_action_mask(representation)
+    assert len(spec.valid_action_mask) == MODEL_ACTION_DIM
+    assert spec.requires_forward_kinematics is (
+        representation is ActionRepresentation.CARTESIAN_31D
+    )
 
 
 def test_spec_validates_matching_pi05_config(action_spec: BimanualActionSpec) -> None:
@@ -68,9 +87,85 @@ def test_spec_metadata_round_trip_contract(action_spec: BimanualActionSpec) -> N
     action_spec.validate_metadata(metadata)
     assert metadata["pi_dex"]["layout_version"] == ACTION_LAYOUT_VERSION
     assert metadata["pi_dex"]["metadata_schema_version"] == ACTION_METADATA_SCHEMA_VERSION
+    assert metadata["pi_dex"]["action_representation"] == action_spec.action_representation.value
+    assert metadata["pi_dex"]["logical_action_dim"] == action_spec.logical_action_dim
     assert metadata["pi_dex"]["left_hand_joint_order"] == list(action_spec.left_hand_joint_order)
     assert metadata["pi_dex"]["right_hand_joint_order"] == list(action_spec.right_hand_joint_order)
     assert metadata["pi_dex"]["hand_mapping_version"] == action_spec.hand_mapping_version
+
+
+def test_joint_spec_metadata_records_29d_joint_layout(action_spec: BimanualActionSpec) -> None:
+    joint_spec = spec_for_representation(action_spec, ActionRepresentation.JOINT_29D)
+
+    metadata = {"pi_dex": joint_spec.to_metadata()}
+
+    joint_spec.validate_metadata(metadata)
+    assert metadata["pi_dex"]["layout_version"] == 3
+    assert metadata["pi_dex"]["metadata_schema_version"] == 3
+    assert metadata["pi_dex"]["action_representation"] == "joint_29d"
+    assert metadata["pi_dex"]["logical_action_dim"] == 29
+    assert metadata["pi_dex"]["model_action_dim"] == 32
+    assert metadata["pi_dex"]["arm_joint_unit"] == "rad"
+    assert metadata["pi_dex"]["coordinate_frame"] is None
+    assert metadata["pi_dex"]["rotation_6d_convention"] is None
+    assert metadata["pi_dex"]["kinematics_calibration_version"] is None
+    assert metadata["pi_dex"]["left_wrist_link"] is None
+    assert metadata["pi_dex"]["right_wrist_link"] is None
+    assert metadata["pi_dex"]["position_unit"] == "not_applicable"
+    assert metadata["pi_dex"]["rotation_6d_unit"] == "not_applicable"
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    [
+        "coordinate_frame",
+        "rotation_6d_convention",
+        "kinematics_calibration_version",
+        "left_wrist_link",
+        "right_wrist_link",
+    ],
+)
+def test_joint_spec_rejects_cartesian_only_fields(
+    action_spec: BimanualActionSpec,
+    field_name: str,
+) -> None:
+    replacements = {
+        "action_representation": ActionRepresentation.JOINT_29D,
+        "coordinate_frame": None,
+        "rotation_6d_convention": None,
+        "kinematics_calibration_version": None,
+        "left_wrist_link": None,
+        "right_wrist_link": None,
+    }
+    replacements[field_name] = getattr(action_spec, field_name)
+
+    with pytest.raises(ValueError, match=rf"{field_name}.*None.*joint_29d"):
+        dataclasses.replace(action_spec, **replacements)
+
+
+def test_spec_rejects_wrong_action_representation_type(action_spec: BimanualActionSpec) -> None:
+    with pytest.raises(TypeError, match="action_representation"):
+        dataclasses.replace(action_spec, action_representation="cartesian_31d")
+
+
+def test_metadata_rejects_other_action_representation(action_spec: BimanualActionSpec) -> None:
+    metadata = action_spec.to_metadata()
+    metadata["action_representation"] = "joint_29d"
+
+    with pytest.raises(ValueError, match="action_representation"):
+        action_spec.validate_metadata({"pi_dex": metadata})
+
+
+@pytest.mark.parametrize("version_field", ["layout_version", "metadata_schema_version"])
+def test_v3_spec_rejects_legacy_v2_metadata(
+    action_spec: BimanualActionSpec,
+    version_field: str,
+) -> None:
+    metadata = action_spec.to_metadata()
+    metadata[version_field] = 2
+
+    with pytest.raises(ValueError, match=version_field):
+        action_spec.validate_metadata({"pi_dex": metadata})
 
 
 def test_spec_rejects_string_subclasses_that_do_not_round_trip_exactly(

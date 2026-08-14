@@ -8,11 +8,12 @@ import math
 from collections.abc import Mapping
 from typing import Any
 
-from pi_dex.actions import LOGICAL_ACTION_DIM
 from pi_dex.actions import MODEL_ACTION_DIM
+from pi_dex.actions import ActionRepresentation
+from pi_dex.actions import valid_action_mask
 
-ACTION_LAYOUT_VERSION = 2
-ACTION_METADATA_SCHEMA_VERSION = 2
+ACTION_LAYOUT_VERSION = 3
+ACTION_METADATA_SCHEMA_VERSION = 3
 HAND_ORDER = ("left", "right")
 
 
@@ -32,7 +33,7 @@ class ActionTimebase(enum.StrEnum):
 
 
 class HandNormalization(enum.StrEnum):
-    """Whether left/right hands use separate or pooled 31D statistics."""
+    """Whether left/right hands use separate or pooled action statistics."""
 
     PER_HAND = "per_hand"
     SHARED = "shared"
@@ -58,13 +59,19 @@ class BimanualActionSpec:
         robot_id: Physical Sharpa station identifier whose calibration applies.
         embodiment_version: Versioned robot-description/kinematic-chain identity.
         coordinate_frame: Reference frame for wrist positions and rotations.
+            Required for Cartesian actions and required to be ``None`` for joint
+            actions.
         action_mode: Whether actions are absolute, delta, or residual commands.
-        hand_normalization: Whether each side has independent 31D normalization
+        action_representation: Whether a logical action contains Cartesian wrist
+            pose and hand joints (31D) or arm and hand joints directly (29D).
+        hand_normalization: Whether each side has independent action normalization
             statistics or both sides share statistics pooled before interleaving.
         rotation_6d_convention: Definition and component order of continuous 6D
-            rotations.
+            rotations. Required for Cartesian actions and ``None`` for joint
+            actions.
         kinematics_calibration_version: Version of the robot model and
             calibration used to derive wrist poses from arm joint commands.
+            Required for Cartesian actions and ``None`` for joint actions.
         command_semantics_version: Provenance/version that verifies recorded
             commanded joint positions are absolute targets.
         left_arm_joint_order: Seven left-arm input joint names in dataset order.
@@ -75,8 +82,10 @@ class BimanualActionSpec:
             column order.
         hand_mapping_version: Versioned contract for left/right hand column
             mappings, including any mirroring, axis, or sign convention.
-        left_wrist_link: Left FK output link identity.
-        right_wrist_link: Right FK output link identity.
+        left_wrist_link: Left FK output link identity for Cartesian actions;
+            ``None`` for joint actions.
+        right_wrist_link: Right FK output link identity for Cartesian actions;
+            ``None`` for joint actions.
         clock_domain: Clock identifier shared by observation, runtime, target, and
             controller timestamps.
         max_group_timestamp_skew_ms: Maximum timestamp spread allowed among the
@@ -102,19 +111,20 @@ class BimanualActionSpec:
     control_frequency_hz: float
     robot_id: str
     embodiment_version: str
-    coordinate_frame: str
+    coordinate_frame: str | None
     action_mode: ActionMode
+    action_representation: ActionRepresentation
     hand_normalization: HandNormalization
-    rotation_6d_convention: Rotation6DConvention
-    kinematics_calibration_version: str
+    rotation_6d_convention: Rotation6DConvention | None
+    kinematics_calibration_version: str | None
     command_semantics_version: str
     left_arm_joint_order: tuple[str, ...]
     right_arm_joint_order: tuple[str, ...]
     left_hand_joint_order: tuple[str, ...]
     right_hand_joint_order: tuple[str, ...]
     hand_mapping_version: str
-    left_wrist_link: str
-    right_wrist_link: str
+    left_wrist_link: str | None
+    right_wrist_link: str | None
     clock_domain: str
     max_group_timestamp_skew_ms: float
     max_alignment_timestamp_error_ms: float
@@ -127,11 +137,6 @@ class BimanualActionSpec:
         _require_positive_finite(self.control_frequency_hz, field_name="control_frequency_hz")
         _require_nonempty(self.robot_id, field_name="robot_id")
         _require_nonempty(self.embodiment_version, field_name="embodiment_version")
-        _require_nonempty(self.coordinate_frame, field_name="coordinate_frame")
-        _require_nonempty(
-            self.kinematics_calibration_version,
-            field_name="kinematics_calibration_version",
-        )
         _require_nonempty(self.command_semantics_version, field_name="command_semantics_version")
         _require_joint_order(
             self.left_arm_joint_order,
@@ -154,8 +159,6 @@ class BimanualActionSpec:
             expected_length=22,
         )
         _require_nonempty(self.hand_mapping_version, field_name="hand_mapping_version")
-        _require_nonempty(self.left_wrist_link, field_name="left_wrist_link")
-        _require_nonempty(self.right_wrist_link, field_name="right_wrist_link")
         _require_nonempty(self.clock_domain, field_name="clock_domain")
         _require_positive_finite(
             self.max_group_timestamp_skew_ms,
@@ -175,17 +178,44 @@ class BimanualActionSpec:
             raise TypeError(f"timebase: expected ActionTimebase, got {type(self.timebase).__name__}")
         if not isinstance(self.action_mode, ActionMode):
             raise TypeError(f"action_mode: expected ActionMode, got {type(self.action_mode).__name__}")
+        if not isinstance(self.action_representation, ActionRepresentation):
+            raise TypeError(
+                "action_representation: expected ActionRepresentation, "
+                f"got {type(self.action_representation).__name__}"
+            )
         if not isinstance(self.hand_normalization, HandNormalization):
             raise TypeError(
                 f"hand_normalization: expected HandNormalization, got {type(self.hand_normalization).__name__}"
             )
-        if not isinstance(self.rotation_6d_convention, Rotation6DConvention):
-            raise TypeError(
-                "rotation_6d_convention: expected Rotation6DConvention, "
-                f"got {type(self.rotation_6d_convention).__name__}"
+        if self.action_representation is ActionRepresentation.CARTESIAN_31D:
+            _require_nonempty(self.coordinate_frame, field_name="coordinate_frame")
+            _require_nonempty(
+                self.kinematics_calibration_version,
+                field_name="kinematics_calibration_version",
             )
-        if self.left_wrist_link == self.right_wrist_link:
-            raise ValueError("left_wrist_link and right_wrist_link must identify different physical links")
+            if not isinstance(self.rotation_6d_convention, Rotation6DConvention):
+                raise TypeError(
+                    "rotation_6d_convention: expected Rotation6DConvention, "
+                    f"got {type(self.rotation_6d_convention).__name__}"
+                )
+            _require_nonempty(self.left_wrist_link, field_name="left_wrist_link")
+            _require_nonempty(self.right_wrist_link, field_name="right_wrist_link")
+            if self.left_wrist_link == self.right_wrist_link:
+                raise ValueError(
+                    "left_wrist_link and right_wrist_link must identify different physical links"
+                )
+        elif self.action_representation is ActionRepresentation.JOINT_29D:
+            for field_name in (
+                "coordinate_frame",
+                "rotation_6d_convention",
+                "kinematics_calibration_version",
+                "left_wrist_link",
+                "right_wrist_link",
+            ):
+                if getattr(self, field_name) is not None:
+                    raise ValueError(
+                        f"{field_name}: expected None for joint_29d actions"
+                    )
         all_joint_orders = {
             "left_arm_joint_order": self.left_arm_joint_order,
             "right_arm_joint_order": self.right_arm_joint_order,
@@ -206,6 +236,31 @@ class BimanualActionSpec:
     def model_action_horizon(self) -> int:
         """Return the even OpenPI sequence length ``2 * K``."""
         return 2 * self.physical_horizon
+
+    @property
+    def logical_action_dim(self) -> int:
+        """Return the representation-specific semantic width, 31 or 29."""
+        if not isinstance(self.action_representation, ActionRepresentation):
+            raise TypeError(
+                "action_representation: expected ActionRepresentation, "
+                f"got {type(self.action_representation).__name__}"
+            )
+        return self.action_representation.logical_action_dim
+
+    @property
+    def valid_action_mask(self) -> tuple[bool, ...]:
+        """Return the 32D semantic-prefix mask for this representation."""
+        return valid_action_mask(self.action_representation)
+
+    @property
+    def requires_forward_kinematics(self) -> bool:
+        """Whether commanded arm joints must be converted to a Cartesian wrist pose."""
+        if not isinstance(self.action_representation, ActionRepresentation):
+            raise TypeError(
+                "action_representation: expected ActionRepresentation, "
+                f"got {type(self.action_representation).__name__}"
+            )
+        return self.action_representation is ActionRepresentation.CARTESIAN_31D
 
     def validate_openpi_model_config(self, model_config: object) -> None:
         """Validate a pi05 model config against this bimanual contract.
@@ -249,9 +304,9 @@ class BimanualActionSpec:
     def to_metadata(self) -> dict[str, Any]:
         """Return serializable, independently versioned semantic metadata.
 
-        ``layout_version`` versions the numerical 31D/32D layout and semantic
-        ownership of every dimension. Version 2 adds explicit hand-column order
-        and mapping identity while retaining the 31D/32D widths.
+        ``layout_version`` versions the numerical layout and semantic ownership of
+        every dimension. Version 3 adds an explicit 31D Cartesian versus 29D joint
+        representation while retaining the pretrained 32D model projection.
         ``metadata_schema_version`` versions the required semantic fields.
         """
         validated_spec = dataclasses.replace(self)
@@ -259,7 +314,8 @@ class BimanualActionSpec:
             "metadata_schema_version": ACTION_METADATA_SCHEMA_VERSION,
             "layout_version": ACTION_LAYOUT_VERSION,
             "hand_order": list(HAND_ORDER),
-            "logical_action_dim": LOGICAL_ACTION_DIM,
+            "action_representation": validated_spec.action_representation.value,
+            "logical_action_dim": validated_spec.logical_action_dim,
             "model_action_dim": MODEL_ACTION_DIM,
             "physical_horizon": validated_spec.physical_horizon,
             "model_action_horizon": validated_spec.model_action_horizon,
@@ -270,7 +326,11 @@ class BimanualActionSpec:
             "coordinate_frame": validated_spec.coordinate_frame,
             "action_mode": validated_spec.action_mode.value,
             "hand_normalization": validated_spec.hand_normalization.value,
-            "rotation_6d_convention": validated_spec.rotation_6d_convention.value,
+            "rotation_6d_convention": (
+                validated_spec.rotation_6d_convention.value
+                if validated_spec.rotation_6d_convention is not None
+                else None
+            ),
             "kinematics_calibration_version": validated_spec.kinematics_calibration_version,
             "command_semantics_version": validated_spec.command_semantics_version,
             "left_arm_joint_order": list(validated_spec.left_arm_joint_order),
@@ -286,9 +346,18 @@ class BimanualActionSpec:
             "max_control_period_error_ms": validated_spec.max_control_period_error_ms,
             "max_observation_age_ms": validated_spec.max_observation_age_ms,
             "max_command_lead_ms": validated_spec.max_command_lead_ms,
-            "position_unit": "m",
+            "arm_joint_unit": "rad",
             "hand_joint_unit": "rad",
-            "rotation_6d_unit": "dimensionless",
+            "position_unit": (
+                "m"
+                if validated_spec.action_representation is ActionRepresentation.CARTESIAN_31D
+                else "not_applicable"
+            ),
+            "rotation_6d_unit": (
+                "dimensionless"
+                if validated_spec.action_representation is ActionRepresentation.CARTESIAN_31D
+                else "not_applicable"
+            ),
         }
 
     def validate_metadata(

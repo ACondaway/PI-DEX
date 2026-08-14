@@ -1,15 +1,16 @@
-"""Canonical PI-DEX action layout and bimanual sequence conversions.
+"""Canonical PI-DEX action representations and bimanual conversions.
 
-A logical single-hand action has 31 values: wrist position in metres, a
-dimensionless continuous 6D rotation representation, and 22 hand joint angles
-in radians. The coordinate frame and absolute, relative, or residual semantics
-must be established by the caller; these conversions preserve them unchanged.
+PI-DEX supports two single-hand logical action representations:
 
-OpenPI's pi05 projection expects 32 values, so the model representation appends
-one nonsemantic zero. A bimanual chunk interleaves those model actions along the
-sequence axis in left-then-right order for each physical control step.
+* ``cartesian_31d``: wrist position, continuous rotation 6D, and hand joints;
+* ``joint_29d``: arm joints and hand joints directly from the command stream.
+
+OpenPI's pi05 projection remains 32-dimensional for both representations. The
+unused suffix is always nonsemantic padding. A bimanual chunk interleaves model
+actions along the sequence axis in left-then-right order at each physical step.
 """
 
+import enum
 from typing import Any
 from typing import TypeAlias
 
@@ -18,85 +19,164 @@ import numpy.typing as npt
 
 WRIST_POSITION_DIM = 3
 WRIST_ROTATION_6D_DIM = 6
+ARM_JOINT_DIM = 7
 HAND_JOINT_DIM = 22
-LOGICAL_ACTION_DIM = WRIST_POSITION_DIM + WRIST_ROTATION_6D_DIM + HAND_JOINT_DIM
+CARTESIAN_LOGICAL_ACTION_DIM = WRIST_POSITION_DIM + WRIST_ROTATION_6D_DIM + HAND_JOINT_DIM
+JOINT_LOGICAL_ACTION_DIM = ARM_JOINT_DIM + HAND_JOINT_DIM
 MODEL_ACTION_DIM = 32
-VALID_ACTION_MASK = (True,) * LOGICAL_ACTION_DIM + (False,)
+
+
+class ActionRepresentation(enum.StrEnum):
+    """Semantic layout of one unpadded single-hand action vector."""
+
+    CARTESIAN_31D = "cartesian_31d"
+    JOINT_29D = "joint_29d"
+
+    @property
+    def logical_action_dim(self) -> int:
+        """Return the number of semantic values before 32D model padding."""
+        if self is ActionRepresentation.CARTESIAN_31D:
+            return CARTESIAN_LOGICAL_ACTION_DIM
+        if self is ActionRepresentation.JOINT_29D:
+            return JOINT_LOGICAL_ACTION_DIM
+        raise AssertionError(f"unsupported action representation: {self!r}")
+
 
 FloatingArray: TypeAlias = npt.NDArray[np.floating[Any]]
 
 
-def pad_action(actions: FloatingArray) -> FloatingArray:
-    """Append the nonsemantic model padding dimension to logical actions.
+def _validate_representation(representation: object) -> ActionRepresentation:
+    if not isinstance(representation, ActionRepresentation):
+        raise TypeError(
+            "representation: expected ActionRepresentation, "
+            f"got {type(representation).__name__}"
+        )
+    return representation
+
+
+def valid_action_mask(representation: ActionRepresentation) -> tuple[bool, ...]:
+    """Return the immutable 32D semantic mask for ``representation``.
 
     Args:
-        actions: CPU NumPy floating-point array with shape ``[..., 31]``. The
-            last axis contains wrist position (metres), 6D rotation, and hand
-            joint angles (radians), in that order.
+        representation: Exact logical layout used by the sample and model run.
 
     Returns:
-        A new array with the same dtype and shape ``[..., 32]`` whose last value
-        is zero.
+        A 32-element tuple whose semantic prefix is true and padding suffix false.
 
     Raises:
-        TypeError: If ``actions`` is not a floating-point NumPy array.
-        ValueError: If the last dimension is not 31 or a semantic value is not
+        TypeError: If ``representation`` is not :class:`ActionRepresentation`.
+    """
+    validated_representation = _validate_representation(representation)
+    logical_dim = validated_representation.logical_action_dim
+    return (True,) * logical_dim + (False,) * (MODEL_ACTION_DIM - logical_dim)
+
+
+# Deprecated module-local compatibility aliases for the original Cartesian
+# layout. They are intentionally not re-exported from ``pi_dex``; new code must
+# use the explicit Cartesian name or a representation-derived width/mask.
+LOGICAL_ACTION_DIM = CARTESIAN_LOGICAL_ACTION_DIM
+VALID_ACTION_MASK = valid_action_mask(ActionRepresentation.CARTESIAN_31D)
+
+
+def pad_action(
+    actions: FloatingArray,
+    *,
+    representation: ActionRepresentation,
+) -> FloatingArray:
+    """Append the nonsemantic suffix required by the 32D OpenPI projection.
+
+    Args:
+        actions: CPU NumPy floating-point array with shape ``[..., D]``, where
+            ``D`` is 31 for ``cartesian_31d`` and 29 for ``joint_29d``.
+        representation: Semantic layout of the input vectors.
+
+    Returns:
+        A new array with the same dtype and shape ``[..., 32]``. Every padding
+        value in the suffix is exactly zero.
+
+    Raises:
+        TypeError: If the representation or array dtype/type is invalid.
+        ValueError: If the logical width is wrong or a semantic value is not
             finite.
     """
-    _validate_actions(actions, field_name="actions", expected_width=LOGICAL_ACTION_DIM)
-    _require_finite_semantic_values(actions, field_name="actions")
-    padding = np.zeros((*actions.shape[:-1], MODEL_ACTION_DIM - LOGICAL_ACTION_DIM), dtype=actions.dtype)
+    validated_representation = _validate_representation(representation)
+    logical_dim = validated_representation.logical_action_dim
+    _validate_actions(actions, field_name="actions", expected_width=logical_dim)
+    _require_finite_semantic_values(
+        actions,
+        field_name="actions",
+        representation=validated_representation,
+    )
+    padding = np.zeros((*actions.shape[:-1], MODEL_ACTION_DIM - logical_dim), dtype=actions.dtype)
     return np.concatenate((actions, padding), axis=-1)
 
 
-def unpad_action(actions: FloatingArray) -> FloatingArray:
-    """Discard the nonsemantic model padding dimension.
+def unpad_action(
+    actions: FloatingArray,
+    *,
+    representation: ActionRepresentation,
+) -> FloatingArray:
+    """Discard the model padding suffix for one explicit action representation.
 
     Args:
-        actions: CPU NumPy floating-point array with shape ``[..., 32]`` in the
-            PI-DEX model action layout. The final value is discarded even when a
-            model predicts a nonzero value for it.
+        actions: CPU NumPy floating-point array with shape ``[..., 32]``.
+        representation: Semantic layout that determines whether 31 or 29 leading
+            values are retained.
 
     Returns:
-        A view with the same dtype and shape ``[..., 31]`` containing wrist
-        position (metres), 6D rotation, and hand joint angles (radians).
+        A view with the same dtype and shape ``[..., D]``. Padding values are
+        discarded even if the model predicted nonzero or non-finite values.
 
     Raises:
-        TypeError: If ``actions`` is not a floating-point NumPy array.
-        ValueError: If the last dimension is not 32 or a retained semantic value
-            is not finite. The discarded padding value may be arbitrary.
+        TypeError: If the representation or array dtype/type is invalid.
+        ValueError: If the model width is not 32 or a retained value is not finite.
     """
+    validated_representation = _validate_representation(representation)
     _validate_actions(actions, field_name="actions", expected_width=MODEL_ACTION_DIM)
-    _require_finite_semantic_values(actions, field_name="actions")
-    return actions[..., :LOGICAL_ACTION_DIM]
+    _require_finite_semantic_values(
+        actions,
+        field_name="actions",
+        representation=validated_representation,
+    )
+    return actions[..., : validated_representation.logical_action_dim]
 
 
-def interleave(left_actions: FloatingArray, right_actions: FloatingArray) -> FloatingArray:
-    """Interleave same-timestep left and right model actions as ``L, R``.
+def interleave(
+    left_actions: FloatingArray,
+    right_actions: FloatingArray,
+    *,
+    representation: ActionRepresentation,
+) -> FloatingArray:
+    """Interleave same-timestep left and right 32D model actions as ``L, R``.
 
     Args:
-        left_actions: CPU NumPy floating-point array with shape ``[..., K, 32]``.
+        left_actions: CPU NumPy floating-point array shaped ``[..., K, 32]``.
         right_actions: Array with the same shape and dtype as ``left_actions``.
-            Both arrays must use identical units, coordinate frames, timing, and
-            absolute, relative, or residual semantics.
+        representation: Semantic layout used to validate the zero padding suffix.
 
     Returns:
-        A new array with shape ``[..., 2 * K, 32]`` ordered as
+        A new array shaped ``[..., 2 * K, 32]`` and ordered as
         ``[left_0, right_0, ..., left_K-1, right_K-1]``.
 
     Raises:
-        TypeError: If either input is not a floating-point NumPy array or their
-            dtypes differ.
-        ValueError: If either input lacks a sequence axis, has a last dimension
-            other than 32, contains a non-finite value or nonzero padding, or
-            their shapes differ.
+        TypeError: If the representation, array type, or dtypes are invalid.
+        ValueError: If widths, shapes, finite values, or zero padding conflict.
     """
+    validated_representation = _validate_representation(representation)
     _validate_model_action_sequence(left_actions, field_name="left_actions")
     _validate_model_action_sequence(right_actions, field_name="right_actions")
     _require_finite_model_values(left_actions, field_name="left_actions")
     _require_finite_model_values(right_actions, field_name="right_actions")
-    _require_zero_padding(left_actions, field_name="left_actions")
-    _require_zero_padding(right_actions, field_name="right_actions")
+    _require_zero_padding(
+        left_actions,
+        field_name="left_actions",
+        representation=validated_representation,
+    )
+    _require_zero_padding(
+        right_actions,
+        field_name="right_actions",
+        representation=validated_representation,
+    )
     if left_actions.shape != right_actions.shape:
         raise ValueError(
             "left_actions and right_actions must have matching shapes; "
@@ -112,26 +192,33 @@ def interleave(left_actions: FloatingArray, right_actions: FloatingArray) -> Flo
     return stacked_actions.reshape(*left_actions.shape[:-2], left_actions.shape[-2] * 2, MODEL_ACTION_DIM)
 
 
-def deinterleave(actions: FloatingArray) -> tuple[FloatingArray, FloatingArray]:
-    """Split an even model horizon into left and right physical-step chunks.
+def deinterleave(
+    actions: FloatingArray,
+    *,
+    representation: ActionRepresentation,
+) -> tuple[FloatingArray, FloatingArray]:
+    """Split an even 32D model horizon into left/right physical-step chunks.
 
     Args:
-        actions: CPU NumPy floating-point array with shape ``[..., 2 * K, 32]``
+        actions: CPU NumPy floating-point array shaped ``[..., 2 * K, 32]`` and
             ordered left then right at every physical control step.
+        representation: Semantic layout used to validate retained values.
 
     Returns:
-        A ``(left_actions, right_actions)`` pair. Each view has shape
-        ``[..., K, 32]`` and preserves the input dtype, units, coordinate frame,
-        timing, and action semantics.
+        A ``(left_actions, right_actions)`` pair of ``[..., K, 32]`` views.
 
     Raises:
-        TypeError: If ``actions`` is not a floating-point NumPy array.
-        ValueError: If the input lacks a sequence axis, its last dimension is
-            not 32, its semantic values are not finite, or its model action
-            horizon is odd. The discarded padding values may be arbitrary.
+        TypeError: If the representation or array type/dtype is invalid.
+        ValueError: If the shape, semantic values, or even-horizon invariant fails.
+            Padding values may be arbitrary because callers unpad model output next.
     """
+    validated_representation = _validate_representation(representation)
     _validate_model_action_sequence(actions, field_name="actions")
-    _require_finite_semantic_values(actions, field_name="actions")
+    _require_finite_semantic_values(
+        actions,
+        field_name="actions",
+        representation=validated_representation,
+    )
     model_action_horizon = actions.shape[-2]
     if model_action_horizon % 2 != 0:
         raise ValueError(f"actions action horizon must be even; got {model_action_horizon}")
@@ -161,8 +248,13 @@ def _validate_actions(actions: np.ndarray, *, field_name: str, expected_width: i
         raise TypeError(f"{field_name}.dtype: expected a floating dtype, got {actions.dtype}")
 
 
-def _require_finite_semantic_values(actions: np.ndarray, *, field_name: str) -> None:
-    semantic_values = actions[..., :LOGICAL_ACTION_DIM]
+def _require_finite_semantic_values(
+    actions: np.ndarray,
+    *,
+    field_name: str,
+    representation: ActionRepresentation,
+) -> None:
+    semantic_values = actions[..., : representation.logical_action_dim]
     if not np.all(np.isfinite(semantic_values)):
         raise ValueError(f"{field_name}: expected all semantic action values to be finite")
 
@@ -172,6 +264,11 @@ def _require_finite_model_values(actions: np.ndarray, *, field_name: str) -> Non
         raise ValueError(f"{field_name}: expected all model action values to be finite")
 
 
-def _require_zero_padding(actions: np.ndarray, *, field_name: str) -> None:
-    if np.any(actions[..., LOGICAL_ACTION_DIM:] != 0):
+def _require_zero_padding(
+    actions: np.ndarray,
+    *,
+    field_name: str,
+    representation: ActionRepresentation,
+) -> None:
+    if np.any(actions[..., representation.logical_action_dim :] != 0):
         raise ValueError(f"{field_name}: expected nonsemantic padding dimensions to be exactly zero")

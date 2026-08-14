@@ -1,10 +1,12 @@
-"""Validated Sharpa commanded-action alignment and kinematics boundary.
+"""Validated Sharpa commanded-action alignment and representation boundary.
 
 This module does not provide a Sharpa North kinematics model. The repository has
 no versioned robot description or calibration from which a trustworthy forward
-kinematics implementation could be built. Callers must inject a provider whose
-structured metadata exactly matches ``BimanualActionSpec``; there is deliberately
-no fallback to optional measured ``state/<side>_arm/tcp_pose`` values.
+kinematics implementation could be built. Cartesian 31D callers must inject a
+provider whose structured metadata exactly matches ``BimanualActionSpec``. Joint
+29D callers instead preserve the recorded commanded arm and hand joint targets
+without invoking kinematics. Neither path falls back to optional measured
+``state/<side>_arm/tcp_pose`` values.
 """
 
 from __future__ import annotations
@@ -16,15 +18,15 @@ from typing import Protocol
 
 import numpy as np
 
+from pi_dex.actions import ARM_JOINT_DIM
 from pi_dex.actions import HAND_JOINT_DIM
-from pi_dex.actions import LOGICAL_ACTION_DIM
 from pi_dex.actions import WRIST_POSITION_DIM
 from pi_dex.actions import WRIST_ROTATION_6D_DIM
+from pi_dex.actions import ActionRepresentation
 from pi_dex.spec import ActionMode
 from pi_dex.spec import ActionTimebase
 from pi_dex.spec import BimanualActionSpec
 
-ARM_JOINT_DIM = 7
 TIMESTAMP_COLUMNS = 2
 CANONICAL_ALIGNED_TIME_FIELD = "observe/vision/head/stereo/lefteye/time"
 ROTATION_6D_ORTHOGONALITY_TOLERANCE = 1e-4
@@ -218,8 +220,10 @@ class BimanualLogicalActionChunk:
     """Derived per-hand logical actions for one synchronized training chunk.
 
     Args:
-        left_actions: Float32 ``[K,31]`` left-hand logical actions.
-        right_actions: Float32 ``[K,31]`` right-hand logical actions.
+        left_actions: Float32 ``[K,D]`` left-hand logical actions, where ``D``
+            is 31 for Cartesian wrist targets or 29 for joint targets.
+        right_actions: Float32 ``[K,D]`` right-hand logical actions using the
+            same representation as ``left_actions``.
         timestamps_s: Float64 ``[K]`` physical-step timestamps in seconds.
         source_aligned_frame: Canonical camera-frame index that starts the chunk.
     """
@@ -303,9 +307,9 @@ def derive_bimanual_logical_action_chunk(
     right_hand: CommandedJointGroup,
     start_aligned_frame: int,
     spec: BimanualActionSpec,
-    kinematics: ForwardKinematicsProvider,
+    kinematics: ForwardKinematicsProvider | None,
 ) -> BimanualLogicalActionChunk:
-    """Align commanded joints and derive synchronized ``[K,31]`` chunks.
+    """Align commanded joints and derive synchronized ``[K,D]`` chunks.
 
     The caller must supply episode provenance that externally verifies the robot
     identity and that recorded commanded joint positions are absolute targets.
@@ -320,7 +324,8 @@ def derive_bimanual_logical_action_chunk(
         right_hand: Exact ``action/right_hand/joint_angle`` group.
         start_aligned_frame: Canonical aligned frame at which the chunk starts.
         spec: Full training/deployment semantic contract.
-        kinematics: Injected and version-matched Sharpa North FK provider.
+        kinematics: Injected and version-matched Sharpa North FK provider for
+            ``CARTESIAN_31D``. It must be ``None`` for ``JOINT_29D``.
 
     Returns:
         Left/right float32 logical actions, their physical-step timestamps, and
@@ -328,9 +333,11 @@ def derive_bimanual_logical_action_chunk(
         camera times; for raw timebase, they are left-arm command times.
 
     Raises:
-        TypeError: If typed inputs or provider outputs violate the interface.
+        TypeError: If typed inputs or Cartesian provider outputs violate the
+            interface, including a missing Cartesian FK provider.
         ValueError: If source roles, N, provenance, semantics, alignment,
-            timestamps, kinematics metadata, or outputs violate the contract.
+            timestamps, representation-specific kinematics use, or outputs
+            violate the contract.
     """
     if not isinstance(aligned_timeline, AlignedTimeline):
         raise TypeError(
@@ -342,7 +349,18 @@ def derive_bimanual_logical_action_chunk(
     validated_spec = dataclasses.replace(spec)
     _validate_absolute_action_contract(validated_spec)
     _validate_provenance(provenance, spec=validated_spec)
-    _validate_kinematics_provider(kinematics, spec=validated_spec)
+    if validated_spec.action_representation is ActionRepresentation.CARTESIAN_31D:
+        _validate_kinematics_provider(kinematics, spec=validated_spec)
+    elif validated_spec.action_representation is ActionRepresentation.JOINT_29D:
+        if kinematics is not None:
+            raise ValueError(
+                "kinematics: expected None for JOINT_29D actions; joint targets must not use FK"
+            )
+    else:
+        raise ValueError(
+            "spec.action_representation: unsupported value "
+            f"{validated_spec.action_representation!r}"
+        )
     _require_group_role(
         left_arm,
         expected_field="action/left_arm/joint_angle",
@@ -388,26 +406,48 @@ def derive_bimanual_logical_action_chunk(
         spec=validated_spec,
     )
 
-    left_actions = derive_logical_actions(
-        HandSide.LEFT,
-        selected_left_arm.joint_angles,
-        selected_left_hand.joint_angles,
-        provenance=provenance,
-        arm_joint_order=left_arm.joint_order,
-        hand_joint_order=left_hand.joint_order,
-        spec=validated_spec,
-        kinematics=kinematics,
-    )
-    right_actions = derive_logical_actions(
-        HandSide.RIGHT,
-        selected_right_arm.joint_angles,
-        selected_right_hand.joint_angles,
-        provenance=provenance,
-        arm_joint_order=right_arm.joint_order,
-        hand_joint_order=right_hand.joint_order,
-        spec=validated_spec,
-        kinematics=kinematics,
-    )
+    if validated_spec.action_representation is ActionRepresentation.CARTESIAN_31D:
+        if kinematics is None:
+            raise AssertionError("validated Cartesian action path lost its kinematics provider")
+        left_actions = derive_logical_actions(
+            HandSide.LEFT,
+            selected_left_arm.joint_angles,
+            selected_left_hand.joint_angles,
+            provenance=provenance,
+            arm_joint_order=left_arm.joint_order,
+            hand_joint_order=left_hand.joint_order,
+            spec=validated_spec,
+            kinematics=kinematics,
+        )
+        right_actions = derive_logical_actions(
+            HandSide.RIGHT,
+            selected_right_arm.joint_angles,
+            selected_right_hand.joint_angles,
+            provenance=provenance,
+            arm_joint_order=right_arm.joint_order,
+            hand_joint_order=right_hand.joint_order,
+            spec=validated_spec,
+            kinematics=kinematics,
+        )
+    else:
+        left_actions = derive_joint_actions(
+            HandSide.LEFT,
+            selected_left_arm.joint_angles,
+            selected_left_hand.joint_angles,
+            provenance=provenance,
+            arm_joint_order=left_arm.joint_order,
+            hand_joint_order=left_hand.joint_order,
+            spec=validated_spec,
+        )
+        right_actions = derive_joint_actions(
+            HandSide.RIGHT,
+            selected_right_arm.joint_angles,
+            selected_right_hand.joint_angles,
+            provenance=provenance,
+            arm_joint_order=right_arm.joint_order,
+            hand_joint_order=right_hand.joint_order,
+            spec=validated_spec,
+        )
     if validated_spec.timebase is ActionTimebase.ALIGNED_30_HZ:
         stop_frame = start_frame + validated_spec.physical_horizon
         timestamps_s = aligned_timeline.time[start_frame:stop_frame, 0].copy()
@@ -437,7 +477,7 @@ def derive_logical_actions(
     spec: BimanualActionSpec,
     kinematics: ForwardKinematicsProvider,
 ) -> np.ndarray:
-    """Derive one side's absolute ``[K,31]`` logical action sequence.
+    """Derive one side's absolute Cartesian ``[K,31]`` action sequence.
 
     Args:
         side: Physical left or right side.
@@ -449,7 +489,7 @@ def derive_logical_actions(
         arm_joint_order: Seven declared input columns for ``arm_joint_angles``.
         hand_joint_order: Twenty-two declared input columns for
             ``hand_joint_angles``.
-        spec: Absolute semantic contract matching the provider.
+        spec: Absolute ``CARTESIAN_31D`` semantic contract matching the provider.
         kinematics: Calibrated provider returning wrist position and rotation 6D.
 
     Returns:
@@ -458,12 +498,17 @@ def derive_logical_actions(
 
     Raises:
         TypeError: If arrays or provider outputs have invalid dtypes/types.
-        ValueError: If provenance, joint order, action mode, shapes, metadata, or
-            pose values are invalid.
+        ValueError: If the representation, provenance, joint order, action mode,
+            shapes, metadata, or pose values are invalid.
     """
     if not isinstance(spec, BimanualActionSpec):
         raise TypeError(f"spec: expected BimanualActionSpec, got {type(spec).__name__}")
     validated_spec = dataclasses.replace(spec)
+    _require_action_representation(
+        validated_spec,
+        expected=ActionRepresentation.CARTESIAN_31D,
+        function_name="derive_logical_actions",
+    )
     _validate_absolute_action_contract(validated_spec)
     if not isinstance(side, HandSide):
         raise TypeError(f"side: expected HandSide, got {type(side).__name__}")
@@ -514,9 +559,108 @@ def derive_logical_actions(
     _validate_rotation_6d(wrist_rotation_6d, field_name=f"kinematics.{side.value}.wrist_rotation_6d")
 
     logical_actions = np.concatenate((wrist_position, wrist_rotation_6d, hand_joint_angles), axis=-1)
-    if logical_actions.shape != (validated_spec.physical_horizon, LOGICAL_ACTION_DIM):
+    if logical_actions.shape != (
+        validated_spec.physical_horizon,
+        validated_spec.logical_action_dim,
+    ):
         raise AssertionError(f"internal action layout error: got shape {logical_actions.shape}")
     return logical_actions
+
+
+def derive_joint_actions(
+    side: HandSide,
+    arm_joint_angles: np.ndarray,
+    hand_joint_angles: np.ndarray,
+    *,
+    provenance: EpisodeActionProvenance,
+    arm_joint_order: tuple[str, ...],
+    hand_joint_order: tuple[str, ...],
+    spec: BimanualActionSpec,
+) -> np.ndarray:
+    """Preserve one side's absolute commanded joints as ``[K,29]`` actions.
+
+    Args:
+        side: Physical left or right side.
+        arm_joint_angles: Float32 commanded angles shaped ``[K,7]`` in radians.
+        hand_joint_angles: Float32 commanded angles shaped ``[K,22]`` in radians.
+        provenance: Verified episode identity, absolute command semantics, and
+            hand-column mapping version.
+        arm_joint_order: Seven declared arm columns in dataset order.
+        hand_joint_order: Twenty-two declared hand columns in dataset order.
+        spec: Absolute ``JOINT_29D`` semantic contract.
+
+    Returns:
+        A new float32 ``[K,29]`` array ordered as the seven arm joint targets
+        followed by the twenty-two hand joint targets, all in radians.
+
+    Raises:
+        TypeError: If typed inputs or arrays violate the interface.
+        ValueError: If representation, provenance, joint order, action mode, or
+            shapes violate the joint-action contract.
+    """
+    if not isinstance(spec, BimanualActionSpec):
+        raise TypeError(f"spec: expected BimanualActionSpec, got {type(spec).__name__}")
+    validated_spec = dataclasses.replace(spec)
+    _require_action_representation(
+        validated_spec,
+        expected=ActionRepresentation.JOINT_29D,
+        function_name="derive_joint_actions",
+    )
+    _validate_absolute_action_contract(validated_spec)
+    if not isinstance(side, HandSide):
+        raise TypeError(f"side: expected HandSide, got {type(side).__name__}")
+    _validate_provenance(provenance, spec=validated_spec)
+    expected_arm_order = (
+        validated_spec.left_arm_joint_order
+        if side is HandSide.LEFT
+        else validated_spec.right_arm_joint_order
+    )
+    expected_hand_order = (
+        validated_spec.left_hand_joint_order
+        if side is HandSide.LEFT
+        else validated_spec.right_hand_joint_order
+    )
+    _require_declared_joint_order(
+        arm_joint_order,
+        expected=expected_arm_order,
+        field_name="arm_joint_order",
+    )
+    _require_declared_joint_order(
+        hand_joint_order,
+        expected=expected_hand_order,
+        field_name="hand_joint_order",
+    )
+    _validate_joint_chunk(
+        arm_joint_angles,
+        field_name=f"{side.value}_arm_joint_angles",
+        expected_shape=(validated_spec.physical_horizon, ARM_JOINT_DIM),
+    )
+    _validate_joint_chunk(
+        hand_joint_angles,
+        field_name=f"{side.value}_hand_joint_angles",
+        expected_shape=(validated_spec.physical_horizon, HAND_JOINT_DIM),
+    )
+
+    logical_actions = np.concatenate((arm_joint_angles, hand_joint_angles), axis=-1)
+    if logical_actions.shape != (
+        validated_spec.physical_horizon,
+        validated_spec.logical_action_dim,
+    ):
+        raise AssertionError(f"internal joint action layout error: got shape {logical_actions.shape}")
+    return logical_actions
+
+
+def _require_action_representation(
+    spec: BimanualActionSpec,
+    *,
+    expected: ActionRepresentation,
+    function_name: str,
+) -> None:
+    if spec.action_representation is not expected:
+        raise ValueError(
+            f"spec.action_representation: {function_name} requires {expected.value!r}, "
+            f"got {spec.action_representation.value!r}"
+        )
 
 
 def _validate_absolute_action_contract(spec: BimanualActionSpec) -> None:
@@ -756,6 +900,14 @@ def _validate_kinematics_provider(
 ) -> None:
     if kinematics is None or not callable(getattr(kinematics, "wrist_pose", None)):
         raise TypeError("kinematics: an explicit calibrated ForwardKinematicsProvider is required")
+    if (
+        spec.coordinate_frame is None
+        or spec.rotation_6d_convention is None
+        or spec.kinematics_calibration_version is None
+        or spec.left_wrist_link is None
+        or spec.right_wrist_link is None
+    ):
+        raise AssertionError("validated Cartesian spec lost required FK metadata")
     expected_metadata = {
         "robot_id": spec.robot_id,
         "embodiment_version": spec.embodiment_version,

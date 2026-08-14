@@ -1,8 +1,8 @@
 """NumPy transforms at the PI-DEX/OpenPI action boundary.
 
 These transforms deliberately use duck typing instead of importing OpenPI. They
-can be inserted into an OpenPI ``transforms.Group`` while keeping the stable
-31D/32D and bimanual layout contract owned by PI-DEX.
+can be inserted into an OpenPI ``transforms.Group`` while keeping the selected
+logical-action/32D model layout contract owned by PI-DEX.
 """
 
 import dataclasses
@@ -11,7 +11,7 @@ from typing import Any
 
 import numpy as np
 
-from pi_dex.actions import LOGICAL_ACTION_DIM
+from pi_dex.actions import ActionRepresentation
 from pi_dex.actions import deinterleave
 from pi_dex.actions import interleave
 from pi_dex.actions import pad_action
@@ -28,15 +28,18 @@ class ValidateBimanualSample:
 
     Args:
         physical_horizon: Exact number ``K`` of per-hand target steps.
+        action_representation: Logical action layout used by both hand targets.
         state_dim: Exact state width bound by normalization stats, or ``None``
             only while computing those statistics for the first time.
 
     Training samples require floating ``state[D]`` and matching finite
-    ``left_actions/right_actions[K,31]``. Inference observations may omit both
-    target fields but still require a finite one-dimensional state vector.
+    ``left_actions/right_actions[K, logical_action_dim]``. Inference observations
+    may omit both target fields but still require a finite one-dimensional state
+    vector.
     """
 
     physical_horizon: int
+    action_representation: ActionRepresentation
     state_dim: int | None = None
 
     def __post_init__(self) -> None:
@@ -48,6 +51,11 @@ class ValidateBimanualSample:
         if self.physical_horizon <= 0:
             raise ValueError(
                 f"physical_horizon: expected a positive integer, got {self.physical_horizon}"
+            )
+        if not isinstance(self.action_representation, ActionRepresentation):
+            raise TypeError(
+                "action_representation: expected ActionRepresentation, "
+                f"got {type(self.action_representation).__name__}"
             )
         if self.state_dim is not None:
             if type(self.state_dim) is not int:
@@ -84,7 +92,10 @@ class ValidateBimanualSample:
             missing_field = RIGHT_ACTIONS_KEY if has_left_actions else LEFT_ACTIONS_KEY
             raise KeyError(f"data: missing required field {missing_field!r}")
 
-        expected_action_shape = (self.physical_horizon, LOGICAL_ACTION_DIM)
+        expected_action_shape = (
+            self.physical_horizon,
+            self.action_representation.logical_action_dim,
+        )
         left_actions = mutable_data[LEFT_ACTIONS_KEY]
         right_actions = mutable_data[RIGHT_ACTIONS_KEY]
         _validate_floating_array(
@@ -107,14 +118,25 @@ class ValidateBimanualSample:
         return mutable_data
 
 
+@dataclasses.dataclass(frozen=True)
 class PackBimanualActions:
     """Pack normalized per-hand logical actions into OpenPI model actions.
 
     Input data must contain ``left_actions`` and ``right_actions`` as NumPy
-    floating arrays with matching shape ``[..., K, 31]``. The transform removes
-    those fields and adds ``actions`` with shape ``[..., 2 * K, 32]`` in
-    left-then-right order. Units and action semantics are preserved.
+    floating arrays with matching shape
+    ``[..., K, action_representation.logical_action_dim]``. The transform
+    removes those fields and adds ``actions`` with shape ``[..., 2 * K, 32]``
+    in left-then-right order. Units and action semantics are preserved.
     """
+
+    action_representation: ActionRepresentation
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.action_representation, ActionRepresentation):
+            raise TypeError(
+                "action_representation: expected ActionRepresentation, "
+                f"got {type(self.action_representation).__name__}"
+            )
 
     def __call__(self, data: Mapping[str, Any]) -> dict[str, Any]:
         """Apply the training-side packing transform.
@@ -148,19 +170,34 @@ class PackBimanualActions:
 
         _require_finite_logical_actions(left_actions, field_name=LEFT_ACTIONS_KEY)
         _require_finite_logical_actions(right_actions, field_name=RIGHT_ACTIONS_KEY)
-        padded_left = pad_action(left_actions)
-        padded_right = pad_action(right_actions)
-        mutable_data[MODEL_ACTIONS_KEY] = interleave(padded_left, padded_right)
+        padded_left = pad_action(left_actions, representation=self.action_representation)
+        padded_right = pad_action(right_actions, representation=self.action_representation)
+        mutable_data[MODEL_ACTIONS_KEY] = interleave(
+            padded_left,
+            padded_right,
+            representation=self.action_representation,
+        )
         return mutable_data
 
 
+@dataclasses.dataclass(frozen=True)
 class UnpackBimanualActions:
     """Unpack OpenPI model actions for per-hand inverse normalization.
 
     Input data must contain ``actions`` with shape ``[..., 2 * K, 32]``. The
     transform removes it and adds ``left_actions`` and ``right_actions`` with
-    shape ``[..., K, 31]``. The model padding value is always discarded.
+    shape ``[..., K, action_representation.logical_action_dim]``. All model
+    padding values are discarded.
     """
+
+    action_representation: ActionRepresentation
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.action_representation, ActionRepresentation):
+            raise TypeError(
+                "action_representation: expected ActionRepresentation, "
+                f"got {type(self.action_representation).__name__}"
+            )
 
     def __call__(self, data: Mapping[str, Any]) -> dict[str, Any]:
         """Apply the inference-side unpacking transform.
@@ -177,9 +214,18 @@ class UnpackBimanualActions:
             if output_key in mutable_data:
                 raise ValueError(f"data already contains reserved field {output_key!r}")
 
-        left_actions, right_actions = deinterleave(model_actions)
-        mutable_data[LEFT_ACTIONS_KEY] = unpad_action(left_actions)
-        mutable_data[RIGHT_ACTIONS_KEY] = unpad_action(right_actions)
+        left_actions, right_actions = deinterleave(
+            model_actions,
+            representation=self.action_representation,
+        )
+        mutable_data[LEFT_ACTIONS_KEY] = unpad_action(
+            left_actions,
+            representation=self.action_representation,
+        )
+        mutable_data[RIGHT_ACTIONS_KEY] = unpad_action(
+            right_actions,
+            representation=self.action_representation,
+        )
         return mutable_data
 
 

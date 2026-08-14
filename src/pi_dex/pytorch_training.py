@@ -2,10 +2,12 @@
 
 The upstream PyTorch model returns an elementwise flow-matching loss with shape
 ``[B, 2 * K, 32]``. This module keeps the pretrained 32D projections and state
-dict unchanged while making the nonsemantic padding channel neutral:
+dict unchanged while making the nonsemantic padding suffix neutral:
 
 * the target action and sampled noise are forced to zero in invalid dimensions;
-* the loss is averaged over the 31 semantic dimensions only.
+* the loss is averaged only over the semantic dimensions selected by the
+  action representation (31 for Cartesian wrist actions or 29 for direct
+  joint actions).
 
 The caller remains responsible for DDP setup, device transfer, scheduling,
 checkpointing, and constructing an OpenPI-compatible observation object.
@@ -21,7 +23,6 @@ import torch
 from torch import Tensor
 from torch import nn
 
-from pi_dex.actions import LOGICAL_ACTION_DIM
 from pi_dex.actions import MODEL_ACTION_DIM
 from pi_dex.spec import BimanualActionSpec
 from pi_dex.training_contract import openpi_model_contract_metadata
@@ -32,8 +33,9 @@ class TrainingStepResult:
     """Detached tensor-valued results from one optimizer update.
 
     Attributes:
-        loss: Detached scalar mean over batch, horizon, and the 31 semantic
-            action dimensions. It remains on the training device.
+        loss: Detached scalar mean over batch, horizon, and the semantic action
+            dimensions selected by ``BimanualActionSpec``. It remains on the
+            training device.
         gradient_norm: Scalar norm returned by PyTorch clipping, or ``None`` when
             clipping was disabled. A tensor result is detached and remains on the
             training device.
@@ -47,13 +49,13 @@ def neutralize_openpi_dense_action_io(
     model: nn.Module,
     spec: BimanualActionSpec,
 ) -> None:
-    """Project the loaded pi05 action I/O layers onto the 31D subspace.
+    """Project loaded pi05 action I/O layers onto the selected semantic subspace.
 
     This serving-time projection changes only parameters that multiply or emit
-    the nonsemantic 32nd action value. Training always presents zero in that
-    input column and excludes the corresponding output row from the loss, so
-    zeroing them makes OpenPI's stock denoising sampler padding-neutral without
-    changing any semantic checkpoint parameter.
+    the representation-specific nonsemantic action suffix. Training always
+    presents zero in those input columns and excludes the corresponding output
+    rows from the loss, so zeroing them makes OpenPI's stock denoising sampler
+    padding-neutral without changing any semantic checkpoint parameter.
 
     Args:
         model: Loaded OpenPI ``PI0Pytorch`` model, optionally DDP-wrapped.
@@ -87,9 +89,9 @@ def neutralize_openpi_dense_action_io(
         raise ValueError("model.action_out_proj.bias: expected a bias tensor")
 
     with torch.no_grad():
-        action_input_projection.weight[:, LOGICAL_ACTION_DIM:] = 0
-        action_output_projection.weight[LOGICAL_ACTION_DIM:, :] = 0
-        action_output_projection.bias[LOGICAL_ACTION_DIM:] = 0
+        action_input_projection.weight[:, validated_spec.logical_action_dim :] = 0
+        action_output_projection.weight[validated_spec.logical_action_dim :, :] = 0
+        action_output_projection.bias[validated_spec.logical_action_dim :] = 0
 
 
 def validate_model_action_batch(actions: Tensor, spec: BimanualActionSpec) -> None:
@@ -128,46 +130,53 @@ def validate_model_action_batch(actions: Tensor, spec: BimanualActionSpec) -> No
         raise TypeError(f"actions.dtype: expected torch.float32, got {actions.dtype}")
 
 
-def neutralize_model_padding(values: Tensor) -> Tensor:
+def neutralize_model_padding(values: Tensor, spec: BimanualActionSpec) -> Tensor:
     """Return a tensor with every nonsemantic action dimension set to zero.
 
     Args:
         values: Floating PyTorch tensor with final dimension 32, on any device.
+        spec: Action contract selecting which leading dimensions are semantic.
 
     Returns:
-        A new tensor with the same shape, dtype, and device. The 31 semantic
-        values are unchanged and the final padding value is zero.
+        A new tensor with the same shape, dtype, and device. Semantic values are
+        unchanged and all remaining model-padding values are zero.
 
     Raises:
         TypeError: If ``values`` is not a floating PyTorch tensor.
         ValueError: If the final dimension is not 32.
     """
+    validated_spec = _validated_spec_copy(spec)
     _validate_elementwise_tensor(values, field_name="values")
     neutralized = values.clone()
-    neutralized[..., LOGICAL_ACTION_DIM:] = 0
+    neutralized[..., validated_spec.logical_action_dim :] = 0
     return neutralized
 
 
-def reduce_semantic_action_loss(elementwise_loss: Tensor) -> Tensor:
-    """Average an elementwise loss over the 31 semantic dimensions only.
+def reduce_semantic_action_loss(
+    elementwise_loss: Tensor,
+    spec: BimanualActionSpec,
+) -> Tensor:
+    """Average an elementwise loss over the selected semantic dimensions only.
 
     Args:
         elementwise_loss: Floating tensor with shape ``[..., 32]``. For OpenPI
             pi05 training the full shape is ``[B, 2 * K, 32]``.
+        spec: Action contract selecting the 31D Cartesian or 29D joint layout.
 
     Returns:
         A scalar tensor. Invalid dimensions are excluded before the mean, so the
-        loss scale is not reduced by a factor of 31/32.
+        loss scale is not reduced by including padding dimensions.
 
     Raises:
         TypeError: If the input is not a floating PyTorch tensor.
         ValueError: If it has no elements or its final dimension is not 32.
         FloatingPointError: If the reduced semantic loss is NaN or infinite.
     """
+    validated_spec = _validated_spec_copy(spec)
     _validate_elementwise_tensor(elementwise_loss, field_name="elementwise_loss")
     if elementwise_loss.numel() == 0:
         raise ValueError("elementwise_loss: expected at least one value")
-    semantic_loss = elementwise_loss[..., :LOGICAL_ACTION_DIM].mean()
+    semantic_loss = elementwise_loss[..., : validated_spec.logical_action_dim].mean()
     if not torch.isfinite(semantic_loss).item():
         raise FloatingPointError("semantic action loss: expected a finite scalar before backward")
     return semantic_loss
@@ -192,7 +201,7 @@ def compute_semantic_flow_matching_loss(
         actions: Float32 tensor with shape ``[B, 2 * K, 32]`` on the model device.
         spec: Bimanual action contract matching the model config.
         noise: Optional explicit float32 noise tensor with the same shape and
-            device as ``actions``. Its padding channel is neutralized in a copy.
+            device as ``actions``. Its padding suffix is neutralized in a copy.
         time: Optional explicit float32 diffusion times with shape ``[B]`` on
             the same device as ``actions``.
         generator: Optional PyTorch generator used only when ``noise`` is omitted.
@@ -212,7 +221,7 @@ def compute_semantic_flow_matching_loss(
     if time is not None:
         _validate_matching_time(time, actions=actions)
 
-    semantic_actions = neutralize_model_padding(actions)
+    semantic_actions = neutralize_model_padding(actions, validated_spec)
     if noise is None:
         if generator is not None:
             _validate_generator_device(generator, actions=actions)
@@ -224,7 +233,7 @@ def compute_semantic_flow_matching_loss(
         )
     else:
         _validate_matching_noise(noise, actions=semantic_actions)
-    semantic_noise = neutralize_model_padding(noise)
+    semantic_noise = neutralize_model_padding(noise, validated_spec)
 
     elementwise_loss = model(observation, semantic_actions, noise=semantic_noise, time=time)
     if not isinstance(elementwise_loss, Tensor):
@@ -237,7 +246,7 @@ def compute_semantic_flow_matching_loss(
         raise TypeError(f"model output dtype: expected {semantic_actions.dtype}, got {elementwise_loss.dtype}")
     if elementwise_loss.device != semantic_actions.device:
         raise ValueError(f"model output device: expected {semantic_actions.device}, got {elementwise_loss.device}")
-    return reduce_semantic_action_loss(elementwise_loss)
+    return reduce_semantic_action_loss(elementwise_loss, validated_spec)
 
 
 class PiDexPytorchTrainer:

@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 import pi_dex.openpi_integration as openpi_integration
-from pi_dex.actions import LOGICAL_ACTION_DIM
+from pi_dex.actions import ActionRepresentation
 from pi_dex.openpi_integration import BimanualDataConfigFactory
 from pi_dex.openpi_integration import compute_bimanual_normalization_stats
 from pi_dex.openpi_integration import configure_bimanual_data
@@ -20,6 +20,7 @@ from pi_dex.openpi_transforms import UnpackBimanualActions
 from pi_dex.openpi_transforms import ValidateBimanualSample
 from pi_dex.spec import BimanualActionSpec
 from pi_dex.spec import HandNormalization
+from tests.helpers import spec_for_representation
 
 
 @dataclasses.dataclass(frozen=True)
@@ -73,7 +74,7 @@ def make_bimanual_data_factory(
     )
 
 
-def make_valid_norm_stats() -> dict[str, dict[str, np.ndarray]]:
+def make_valid_norm_stats(action_spec: BimanualActionSpec) -> dict[str, dict[str, np.ndarray]]:
     def make_entry(width: int) -> dict[str, np.ndarray]:
         return {
             "mean": np.zeros((width,), dtype=np.float32),
@@ -84,8 +85,8 @@ def make_valid_norm_stats() -> dict[str, dict[str, np.ndarray]]:
 
     return {
         "state": make_entry(4),
-        "left_actions": make_entry(LOGICAL_ACTION_DIM),
-        "right_actions": make_entry(LOGICAL_ACTION_DIM),
+        "left_actions": make_entry(action_spec.logical_action_dim),
+        "right_actions": make_entry(action_spec.logical_action_dim),
     }
 
 
@@ -213,15 +214,27 @@ def test_configure_bimanual_data_preserves_openpi_transform_order(action_spec: B
     assert configured.model_transforms.inputs[0] is tokenize
     assert isinstance(configured.model_transforms.inputs[-1], PackBimanualActions)
     assert isinstance(configured.model_transforms.outputs[0], UnpackBimanualActions)
+    assert (
+        configured.model_transforms.inputs[-1].action_representation
+        is action_spec.action_representation
+    )
+    assert (
+        configured.model_transforms.outputs[0].action_representation
+        is action_spec.action_representation
+    )
     assert len(configured.model_transforms.outputs) == 1
     assert isinstance(configured.data_transforms.inputs[-1], ValidateBimanualSample)
     assert configured.data_transforms.inputs[-1].physical_horizon == action_spec.physical_horizon
+    assert (
+        configured.data_transforms.inputs[-1].action_representation
+        is action_spec.action_representation
+    )
 
 
 def test_configure_bimanual_data_binds_state_width_from_stats(
     action_spec: BimanualActionSpec,
 ) -> None:
-    data_config = FakeDataConfig(norm_stats=make_valid_norm_stats())
+    data_config = FakeDataConfig(norm_stats=make_valid_norm_stats(action_spec))
 
     configured = configure_bimanual_data(data_config, make_model_config(), action_spec)
 
@@ -305,11 +318,37 @@ def test_configure_bimanual_data_is_idempotent(action_spec: BimanualActionSpec) 
     assert twice is once
 
 
+def test_configure_bimanual_data_rejects_existing_transforms_for_another_representation(
+    action_spec: BimanualActionSpec,
+) -> None:
+    configured = configure_bimanual_data(
+        FakeDataConfig(FakeGroup()),
+        make_model_config(),
+        action_spec,
+    )
+    other_representation = (
+        ActionRepresentation.JOINT_29D
+        if action_spec.action_representation is ActionRepresentation.CARTESIAN_31D
+        else ActionRepresentation.CARTESIAN_31D
+    )
+    other_spec = spec_for_representation(action_spec, other_representation)
+
+    with pytest.raises(ValueError, match="action representation conflicts"):
+        configure_bimanual_data(configured, make_model_config(), other_spec)
+
+
 def test_configure_bimanual_data_rejects_validator_for_another_horizon(
     action_spec: BimanualActionSpec,
 ) -> None:
     data_config = FakeDataConfig(
-        data_transforms=FakeGroup(inputs=(ValidateBimanualSample(physical_horizon=1),))
+        data_transforms=FakeGroup(
+            inputs=(
+                ValidateBimanualSample(
+                    physical_horizon=1,
+                    action_representation=action_spec.action_representation,
+                ),
+            )
+        )
     )
 
     with pytest.raises(ValueError, match="validator physical horizon conflicts"):
@@ -325,7 +364,12 @@ def test_configure_bimanual_data_upgrades_or_rejects_bound_state_width(
 ) -> None:
     unbound = FakeDataConfig(
         data_transforms=FakeGroup(
-            inputs=(ValidateBimanualSample(physical_horizon=action_spec.physical_horizon),),
+            inputs=(
+                ValidateBimanualSample(
+                    physical_horizon=action_spec.physical_horizon,
+                    action_representation=action_spec.action_representation,
+                ),
+            ),
         ),
     )
 
@@ -349,11 +393,17 @@ def test_configure_bimanual_data_upgrades_or_rejects_bound_state_width(
 @pytest.mark.parametrize(
     "model_transforms",
     [
-        FakeGroup(inputs=(PackBimanualActions(), object()), outputs=(UnpackBimanualActions(),)),
-        FakeGroup(inputs=(PackBimanualActions(),), outputs=()),
         FakeGroup(
-            inputs=(PackBimanualActions(), PackBimanualActions()),
-            outputs=(UnpackBimanualActions(),),
+            inputs=(PackBimanualActions(ActionRepresentation.CARTESIAN_31D), object()),
+            outputs=(UnpackBimanualActions(ActionRepresentation.CARTESIAN_31D),),
+        ),
+        FakeGroup(inputs=(PackBimanualActions(ActionRepresentation.CARTESIAN_31D),), outputs=()),
+        FakeGroup(
+            inputs=(
+                PackBimanualActions(ActionRepresentation.CARTESIAN_31D),
+                PackBimanualActions(ActionRepresentation.CARTESIAN_31D),
+            ),
+            outputs=(UnpackBimanualActions(ActionRepresentation.CARTESIAN_31D),),
         ),
     ],
 )
@@ -434,17 +484,28 @@ def _apply_transforms(transforms, sample):
     return result
 
 
-def test_compute_stats_keeps_31d_per_hand_until_after_normalization(
+@pytest.mark.parametrize("representation", list(ActionRepresentation))
+def test_compute_stats_keeps_logical_actions_until_after_normalization(
     action_spec: BimanualActionSpec,
     monkeypatch,
+    representation: ActionRepresentation,
 ) -> None:
+    action_spec = spec_for_representation(action_spec, representation)
     validation_calls = []
     install_fake_openpi(monkeypatch, validation_calls)
     dataset = [
         {
             "state": np.full((4,), index, dtype=np.float32),
-            "left_actions": np.full((2, LOGICAL_ACTION_DIM), index + 1, dtype=np.float32),
-            "right_actions": np.full((2, LOGICAL_ACTION_DIM), index + 11, dtype=np.float32),
+            "left_actions": np.full(
+                (2, action_spec.logical_action_dim),
+                index + 1,
+                dtype=np.float32,
+            ),
+            "right_actions": np.full(
+                (2, action_spec.logical_action_dim),
+                index + 11,
+                dtype=np.float32,
+            ),
         }
         for index in range(2)
     ]
@@ -455,8 +516,8 @@ def test_compute_stats_keeps_31d_per_hand_until_after_normalization(
 
     stats = compute_bimanual_normalization_stats(dataset, data_config, action_spec)
 
-    assert stats["left_actions"].mean.shape == (LOGICAL_ACTION_DIM,)
-    assert stats["right_actions"].mean.shape == (LOGICAL_ACTION_DIM,)
+    assert stats["left_actions"].mean.shape == (action_spec.logical_action_dim,)
+    assert stats["right_actions"].mean.shape == (action_spec.logical_action_dim,)
     assert stats["left_actions"].mean[0] == 1.5
     assert stats["right_actions"].mean[0] == 11.5
     assert len(validation_calls) == 1
@@ -475,13 +536,21 @@ def test_compute_stats_can_pool_left_and_right_explicitly(
     dataset = [
         {
             "state": np.zeros((4,), dtype=np.float32),
-            "left_actions": np.zeros((2, LOGICAL_ACTION_DIM), dtype=np.float32),
-            "right_actions": np.full((2, LOGICAL_ACTION_DIM), 10.0, dtype=np.float32),
+            "left_actions": np.zeros((2, shared_spec.logical_action_dim), dtype=np.float32),
+            "right_actions": np.full(
+                (2, shared_spec.logical_action_dim),
+                10.0,
+                dtype=np.float32,
+            ),
         },
         {
             "state": np.ones((4,), dtype=np.float32),
-            "left_actions": np.zeros((2, LOGICAL_ACTION_DIM), dtype=np.float32),
-            "right_actions": np.full((2, LOGICAL_ACTION_DIM), 10.0, dtype=np.float32),
+            "left_actions": np.zeros((2, shared_spec.logical_action_dim), dtype=np.float32),
+            "right_actions": np.full(
+                (2, shared_spec.logical_action_dim),
+                10.0,
+                dtype=np.float32,
+            ),
         },
     ]
     data_config = types.SimpleNamespace(repack_transforms=FakeGroup(), data_transforms=FakeGroup())
@@ -490,11 +559,11 @@ def test_compute_stats_can_pool_left_and_right_explicitly(
 
     np.testing.assert_array_equal(
         stats["left_actions"].mean,
-        np.full((LOGICAL_ACTION_DIM,), 5.0),
+        np.full((shared_spec.logical_action_dim,), 5.0),
     )
     np.testing.assert_array_equal(
         stats["right_actions"].mean,
-        np.full((LOGICAL_ACTION_DIM,), 5.0),
+        np.full((shared_spec.logical_action_dim,), 5.0),
     )
 
 
@@ -506,13 +575,19 @@ def test_compute_stats_requires_exact_unbatched_hand_shapes(
     dataset = [
         {
             "state": np.zeros((4,), dtype=np.float32),
-            "left_actions": np.zeros((1, 2, LOGICAL_ACTION_DIM), dtype=np.float32),
-            "right_actions": np.zeros((2, LOGICAL_ACTION_DIM), dtype=np.float32),
+            "left_actions": np.zeros(
+                (1, 2, action_spec.logical_action_dim),
+                dtype=np.float32,
+            ),
+            "right_actions": np.zeros((2, action_spec.logical_action_dim), dtype=np.float32),
         }
     ]
     data_config = types.SimpleNamespace(repack_transforms=FakeGroup(), data_transforms=FakeGroup())
 
-    with pytest.raises(ValueError, match=r"left_actions.*expected \(2, 31\)"):
+    with pytest.raises(
+        ValueError,
+        match=rf"left_actions.*expected \(2, {action_spec.logical_action_dim}\)",
+    ):
         compute_bimanual_normalization_stats(dataset, data_config, action_spec)
 
 
@@ -524,8 +599,8 @@ def test_compute_stats_requires_matching_hand_dtypes(
     dataset = [
         {
             "state": np.zeros((4,), dtype=np.float32),
-            "left_actions": np.zeros((2, LOGICAL_ACTION_DIM), dtype=np.float32),
-            "right_actions": np.zeros((2, LOGICAL_ACTION_DIM), dtype=np.float64),
+            "left_actions": np.zeros((2, action_spec.logical_action_dim), dtype=np.float32),
+            "right_actions": np.zeros((2, action_spec.logical_action_dim), dtype=np.float64),
         }
     ]
     data_config = types.SimpleNamespace(repack_transforms=FakeGroup(), data_transforms=FakeGroup())
@@ -542,8 +617,8 @@ def test_compute_stats_requires_unbatched_one_dimensional_state(
     dataset = [
         {
             "state": np.zeros((2, 4), dtype=np.float32),
-            "left_actions": np.zeros((2, LOGICAL_ACTION_DIM), dtype=np.float32),
-            "right_actions": np.zeros((2, LOGICAL_ACTION_DIM), dtype=np.float32),
+            "left_actions": np.zeros((2, action_spec.logical_action_dim), dtype=np.float32),
+            "right_actions": np.zeros((2, action_spec.logical_action_dim), dtype=np.float32),
         }
     ]
     data_config = types.SimpleNamespace(repack_transforms=FakeGroup(), data_transforms=FakeGroup())
@@ -666,7 +741,7 @@ def test_custom_dataset_loader_rejects_openpi_fake_repo_normalization_sentinel(
     action_spec: BimanualActionSpec,
 ) -> None:
     model_config = make_model_config()
-    data_config = FakeDataConfig(norm_stats=make_valid_norm_stats(), repo_id="fake")
+    data_config = FakeDataConfig(norm_stats=make_valid_norm_stats(action_spec), repo_id="fake")
 
     with pytest.raises(ValueError, match="'fake' disables normalization"):
         create_pytorch_data_loader_from_dataset(
@@ -686,7 +761,10 @@ def test_custom_dataset_loader_requires_pi05_quantile_normalization(
     action_spec: BimanualActionSpec,
 ) -> None:
     model_config = make_model_config()
-    data_config = FakeDataConfig(norm_stats=make_valid_norm_stats(), use_quantile_norm=False)
+    data_config = FakeDataConfig(
+        norm_stats=make_valid_norm_stats(action_spec),
+        use_quantile_norm=False,
+    )
 
     with pytest.raises(ValueError, match="use_quantile_norm"):
         create_pytorch_data_loader_from_dataset(
@@ -744,7 +822,7 @@ def test_custom_dataset_loader_wires_openpi_pytorch_loader(
     monkeypatch.setitem(sys.modules, "openpi.training.data_loader", data_loader_module)
 
     dataset = object()
-    data_config = FakeDataConfig(norm_stats=make_valid_norm_stats())
+    data_config = FakeDataConfig(norm_stats=make_valid_norm_stats(action_spec))
     model_config = make_model_config()
     loader = create_pytorch_data_loader_from_dataset(
         dataset,
@@ -794,7 +872,7 @@ def test_create_trained_policy_requires_quantiles_then_validates_checkpoint_stat
     model_dtype: str,
 ) -> None:
     captured: dict[str, object] = {}
-    norm_stats = make_valid_norm_stats()
+    norm_stats = make_valid_norm_stats(action_spec)
 
     download_module = types.ModuleType("openpi.shared.download")
 

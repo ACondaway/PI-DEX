@@ -5,13 +5,14 @@ import types
 import numpy as np
 import pytest
 
-from pi_dex.actions import LOGICAL_ACTION_DIM
+from pi_dex.actions import ActionRepresentation
 from pi_dex.checkpoints import load_and_validate_training_contract
 from pi_dex.checkpoints import save_training_contract
 from pi_dex.checkpoints import validate_normalization_asset_id
 from pi_dex.normalization import NORMALIZATION_FINGERPRINT_ALGORITHM
 from pi_dex.normalization import normalization_stats_fingerprint
 from pi_dex.spec import BimanualActionSpec
+from tests.helpers import spec_for_representation
 
 ASSET_ID = "sharpa_north_train_v1"
 
@@ -31,7 +32,9 @@ def make_model_config(**overrides: object) -> object:
     return types.SimpleNamespace(**values)
 
 
-def make_norm_stats() -> dict[str, dict[str, np.ndarray]]:
+def make_norm_stats(
+    action_spec: BimanualActionSpec | None = None,
+) -> dict[str, dict[str, np.ndarray]]:
     def stats(width: int, offset: float) -> dict[str, np.ndarray]:
         mean = np.arange(width, dtype=np.float32) + offset
         return {
@@ -41,10 +44,15 @@ def make_norm_stats() -> dict[str, dict[str, np.ndarray]]:
             "q99": mean + 1.0,
         }
 
+    logical_action_dim = (
+        ActionRepresentation.CARTESIAN_31D.logical_action_dim
+        if action_spec is None
+        else action_spec.logical_action_dim
+    )
     return {
         "state": stats(4, 0.0),
-        "left_actions": stats(LOGICAL_ACTION_DIM, 10.0),
-        "right_actions": stats(LOGICAL_ACTION_DIM, 20.0),
+        "left_actions": stats(logical_action_dim, 10.0),
+        "right_actions": stats(logical_action_dim, 20.0),
     }
 
 
@@ -69,7 +77,7 @@ def stage_training_contract(
     model_config=None,
 ):
     if norm_stats is None:
-        norm_stats = make_norm_stats()
+        norm_stats = make_norm_stats(action_spec)
     if model_config is None:
         model_config = make_model_config()
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -98,13 +106,19 @@ def load_training_contract(
         checkpoint_dir,
         action_spec,
         model_config=model_config or make_model_config(),
-        norm_stats=norm_stats or make_norm_stats(),
+        norm_stats=norm_stats or make_norm_stats(action_spec),
         asset_id=asset_id,
     )
 
 
-def test_training_contract_round_trip(tmp_path, action_spec: BimanualActionSpec) -> None:
-    norm_stats = make_norm_stats()
+@pytest.mark.parametrize("representation", list(ActionRepresentation))
+def test_training_contract_round_trip(
+    tmp_path,
+    action_spec: BimanualActionSpec,
+    representation: ActionRepresentation,
+) -> None:
+    action_spec = spec_for_representation(action_spec, representation)
+    norm_stats = make_norm_stats(action_spec)
     metadata_path = stage_training_contract(
         tmp_path,
         action_spec,
@@ -179,6 +193,21 @@ def test_training_contract_rejects_resume_with_different_horizon(
             tmp_path,
             action_spec,
             norm_stats=norm_stats,
+        )
+
+
+def test_training_contract_rejects_resume_with_different_action_representation(
+    tmp_path,
+    action_spec: BimanualActionSpec,
+) -> None:
+    stage_training_contract(tmp_path, action_spec)
+    joint_spec = spec_for_representation(action_spec, ActionRepresentation.JOINT_29D)
+
+    with pytest.raises(ValueError, match="action_representation"):
+        load_training_contract(
+            tmp_path,
+            joint_spec,
+            norm_stats=make_norm_stats(joint_spec),
         )
 
 

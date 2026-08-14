@@ -7,8 +7,10 @@ from collections.abc import Mapping
 import numpy as np
 import pytest
 
+from pi_dex.actions import JOINT_LOGICAL_ACTION_DIM
 from pi_dex.actions import LOGICAL_ACTION_DIM
 from pi_dex.actions import MODEL_ACTION_DIM
+from pi_dex.actions import ActionRepresentation
 from pi_dex.deployment import BimanualActionChunkBroker
 from pi_dex.deployment import BimanualBrokerFault
 from pi_dex.deployment import BimanualCommandDispatcher
@@ -22,6 +24,7 @@ from pi_dex.deployment import SESSION_ID_FIELD
 from pi_dex.deployment import validate_deployment_metadata
 from pi_dex.deployment import validate_execution_horizon
 from pi_dex.spec import BimanualActionSpec
+from tests.helpers import spec_for_representation
 
 CLOCK_DOMAIN = "unix_realtime"
 SOURCE_TIMESTAMP_NS = 1_000_000_000
@@ -244,8 +247,8 @@ def make_observation(
 
 
 def make_unbounded_limits(spec: BimanualActionSpec) -> BimanualSafetyLimits:
-    lower = np.full((LOGICAL_ACTION_DIM,), np.finfo(np.float32).min, dtype=np.float32)
-    upper = np.full((LOGICAL_ACTION_DIM,), np.finfo(np.float32).max, dtype=np.float32)
+    lower = np.full((spec.logical_action_dim,), np.finfo(np.float32).min, dtype=np.float32)
+    upper = np.full((spec.logical_action_dim,), np.finfo(np.float32).max, dtype=np.float32)
     return BimanualSafetyLimits(spec, lower, upper, lower, upper)
 
 
@@ -295,6 +298,20 @@ def make_step_result(
     }
 
 
+def make_joint_step_result() -> dict[str, object]:
+    return {
+        "actions": {
+            "left": np.zeros((JOINT_LOGICAL_ACTION_DIM,), dtype=np.float32),
+            "right": np.zeros((JOINT_LOGICAL_ACTION_DIM,), dtype=np.float32),
+        },
+        "source_timestamp_ns": SOURCE_TIMESTAMP_NS,
+        "clock_domain": CLOCK_DOMAIN,
+        "chunk_sequence_id": 1,
+        "chunk_step_index": 0,
+        SESSION_ID_FIELD: SESSION_ID,
+    }
+
+
 def test_policy_adapter_strips_transport_fields_without_mutating_observation(
     action_spec: BimanualActionSpec,
 ) -> None:
@@ -315,6 +332,30 @@ def test_policy_adapter_strips_transport_fields_without_mutating_observation(
     assert result["clock_domain"] == CLOCK_DOMAIN
     assert result["chunk_sequence_id"] == 1
     assert result[SESSION_ID_FIELD] == adapter.metadata["pi_dex"][SESSION_ID_FIELD]
+
+
+def test_joint_policy_adapter_uses_29d_wire_actions(action_spec: BimanualActionSpec) -> None:
+    joint_spec = spec_for_representation(action_spec, ActionRepresentation.JOINT_29D)
+    policy = FakeLogicalPolicy(joint_spec)
+    policy.left_actions = np.zeros((2, JOINT_LOGICAL_ACTION_DIM), dtype=np.float64)
+    policy.right_actions = np.zeros((2, JOINT_LOGICAL_ACTION_DIM), dtype=np.float64)
+
+    result = BimanualPolicyAdapter(policy, joint_spec, execution_horizon=1).infer(make_observation())
+
+    assert result["actions"]["left"].shape == (1, JOINT_LOGICAL_ACTION_DIM)
+    assert result["actions"]["right"].shape == (1, JOINT_LOGICAL_ACTION_DIM)
+
+
+def test_joint_safety_limits_require_29d_vectors(action_spec: BimanualActionSpec) -> None:
+    joint_spec = spec_for_representation(action_spec, ActionRepresentation.JOINT_29D)
+    valid = np.zeros((JOINT_LOGICAL_ACTION_DIM,), dtype=np.float32)
+    wrong = np.zeros((LOGICAL_ACTION_DIM,), dtype=np.float32)
+
+    limits = BimanualSafetyLimits(joint_spec, valid, valid, valid, valid)
+
+    assert limits.left_min.shape == (JOINT_LOGICAL_ACTION_DIM,)
+    with pytest.raises(ValueError, match=r"expected \(29,\)"):
+        BimanualSafetyLimits(joint_spec, wrong, valid, valid, valid)
 
 
 def test_policy_adapter_snapshots_nested_observation_values(action_spec: BimanualActionSpec) -> None:
@@ -745,7 +786,11 @@ def test_broker_snapshots_observation_before_remote_policy_serialization() -> No
             pass
 
     policy = BlockingWirePolicy()
-    broker = BimanualActionChunkBroker(policy, execution_horizon=2)
+    broker = BimanualActionChunkBroker(
+        policy,
+        execution_horizon=2,
+        action_representation=ActionRepresentation.CARTESIAN_31D,
+    )
     image = np.asarray([1, 2, 3], dtype=np.uint8)
     observation = {"nested": {"image": image}}
 
@@ -887,7 +932,11 @@ def test_direct_broker_cannot_bypass_metadata_before_hardware_dispatch(
     action_spec: BimanualActionSpec,
 ) -> None:
     policy = FakeWrongHorizonWirePolicy()
-    broker = BimanualActionChunkBroker(policy, execution_horizon=2)
+    broker = BimanualActionChunkBroker(
+        policy,
+        execution_horizon=2,
+        action_representation=ActionRepresentation.CARTESIAN_31D,
+    )
     controller = FakeController(action_spec)
     dispatcher = make_dispatcher(action_spec, controller, session_id=SESSION_ID)
 
@@ -1720,6 +1769,65 @@ def test_dispatcher_validates_both_hands_before_apply(action_spec: BimanualActio
 
     assert controller.applied == []
     assert len(controller.hold_reasons) == 1
+
+
+def test_joint_dispatch_skips_cartesian_rotation_check(action_spec: BimanualActionSpec) -> None:
+    joint_spec = spec_for_representation(action_spec, ActionRepresentation.JOINT_29D)
+    controller = FakeController(joint_spec)
+    dispatcher = make_dispatcher(joint_spec, controller)
+
+    dispatcher.dispatch(make_joint_step_result(), target_timestamp_ns=TARGET_TIMESTAMP_NS)
+
+    assert len(controller.applied) == 1
+    assert controller.applied[0][0].shape == (JOINT_LOGICAL_ACTION_DIM,)
+    assert controller.applied[0][1].shape == (JOINT_LOGICAL_ACTION_DIM,)
+
+
+def test_joint_metadata_broker_dispatches_and_commits_29d_step(
+    action_spec: BimanualActionSpec,
+) -> None:
+    joint_spec = spec_for_representation(action_spec, ActionRepresentation.JOINT_29D)
+    logical_policy = FakeLogicalPolicy(joint_spec)
+    logical_policy.left_actions = np.zeros(
+        (joint_spec.physical_horizon, JOINT_LOGICAL_ACTION_DIM),
+        dtype=np.float64,
+    )
+    logical_policy.right_actions = np.zeros_like(logical_policy.left_actions)
+    logical_policy.left_actions[:, 0] = 11.0
+    logical_policy.right_actions[:, 0] = 22.0
+    wire_policy = BimanualPolicyAdapter(logical_policy, joint_spec, execution_horizon=1)
+    broker = BimanualActionChunkBroker.from_metadata(
+        wire_policy,
+        wire_policy.metadata,
+        joint_spec,
+        expected_execution_horizon=1,
+    )
+    controller = FakeController(joint_spec)
+    dispatcher = make_dispatcher(
+        joint_spec,
+        controller,
+        execution_horizon=1,
+        session_id=broker.session_id,
+    )
+
+    result = broker.dispatch_next(
+        make_observation(),
+        dispatcher,
+        target_timestamp_ns=TARGET_TIMESTAMP_NS,
+    )
+
+    assert result["chunk_step_index"] == 0
+    assert result["actions"]["left"].shape == (JOINT_LOGICAL_ACTION_DIM,)
+    assert result["actions"]["right"].shape == (JOINT_LOGICAL_ACTION_DIM,)
+    assert len(controller.applied) == 1
+    assert controller.applied[0][0][0] == 11.0
+    assert controller.applied[0][1][0] == 22.0
+
+    next_result = broker.peek(make_observation())
+
+    assert logical_policy.calls == 2
+    assert next_result["chunk_sequence_id"] == 2
+    assert next_result["chunk_step_index"] == 0
 
 
 def test_dispatcher_holds_without_apply_on_limit_violation(action_spec: BimanualActionSpec) -> None:

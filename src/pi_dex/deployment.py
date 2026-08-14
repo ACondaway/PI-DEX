@@ -23,10 +23,10 @@ from typing import Protocol
 
 import numpy as np
 
-from pi_dex.actions import LOGICAL_ACTION_DIM
+from pi_dex.actions import ActionRepresentation
 from pi_dex.spec import BimanualActionSpec
 
-DEPLOYMENT_WIRE_FORMAT = "paired_logical_float32_v2"
+DEPLOYMENT_WIRE_FORMAT = "paired_logical_float32_v3"
 OBSERVATION_TIMESTAMP_FIELD = "observation_timestamp_ns"
 CLOCK_DOMAIN_FIELD = "clock_domain"
 SOURCE_TIMESTAMP_FIELD = "source_timestamp_ns"
@@ -135,7 +135,7 @@ class BimanualController(Protocol):
         dispatch_lease: object,
         expected_recovery_epoch: int,
     ) -> None:
-        """Validate lease/time atomically, then apply one paired 31D command.
+        """Validate lease/time atomically, then apply one paired logical command.
 
         Immediately before committing, the controller must use its own clock to
         require ``not_before_timestamp_ns <= now <= not_after_timestamp_ns <
@@ -178,10 +178,9 @@ class BimanualHoldReceipt:
 class BimanualSafetyLimits:
     """Closed per-dimension limits bound to one semantic action contract.
 
-    Bounds have shape ``[31]`` and float32 dtype. They use the exact units and
-    frame declared by ``spec``: wrist position in metres, rotation 6D
-    dimensionless, and hand joints in radians. Arrays are copied onto immutable
-    byte backing, so callers cannot restore write access after initialization.
+    Bounds have shape ``[D]`` and float32 dtype, where ``D`` is selected by
+    ``spec.action_representation``. Arrays are copied onto immutable byte
+    backing, so callers cannot restore write access after initialization.
     """
 
     spec: BimanualActionSpec
@@ -198,17 +197,33 @@ class BimanualSafetyLimits:
         right_min: np.ndarray,
         right_max: np.ndarray,
     ) -> None:
-        """Copy and validate closed ``[31]`` float32 limits for both hands.
+        """Copy and validate closed ``[D]`` float32 limits for both hands.
 
         Raises:
             TypeError: If ``spec`` or an array/dtype is invalid.
             ValueError: If a shape/value is invalid or a minimum exceeds maximum.
         """
         validated_spec = _validated_spec_copy(spec)
-        validated_left_min = _validate_action_vector(left_min, field_name="left_min")
-        validated_left_max = _validate_action_vector(left_max, field_name="left_max")
-        validated_right_min = _validate_action_vector(right_min, field_name="right_min")
-        validated_right_max = _validate_action_vector(right_max, field_name="right_max")
+        validated_left_min = _validate_action_vector(
+            left_min,
+            field_name="left_min",
+            logical_action_dim=validated_spec.logical_action_dim,
+        )
+        validated_left_max = _validate_action_vector(
+            left_max,
+            field_name="left_max",
+            logical_action_dim=validated_spec.logical_action_dim,
+        )
+        validated_right_min = _validate_action_vector(
+            right_min,
+            field_name="right_min",
+            logical_action_dim=validated_spec.logical_action_dim,
+        )
+        validated_right_max = _validate_action_vector(
+            right_max,
+            field_name="right_max",
+            logical_action_dim=validated_spec.logical_action_dim,
+        )
         if np.any(validated_left_min > validated_left_max):
             raise ValueError("left safety limits: every minimum must be <= its maximum")
         if np.any(validated_right_min > validated_right_max):
@@ -221,29 +236,29 @@ class BimanualSafetyLimits:
 
     @property
     def left_min(self) -> np.ndarray:
-        """Return a fresh read-only float32 ``[31]`` view of left minima."""
-        return _action_vector_from_bytes(self._left_min_bytes)
+        """Return a fresh read-only float32 ``[D]`` view of left minima."""
+        return _action_vector_from_bytes(self._left_min_bytes, self.spec.logical_action_dim)
 
     @property
     def left_max(self) -> np.ndarray:
-        """Return a fresh read-only float32 ``[31]`` view of left maxima."""
-        return _action_vector_from_bytes(self._left_max_bytes)
+        """Return a fresh read-only float32 ``[D]`` view of left maxima."""
+        return _action_vector_from_bytes(self._left_max_bytes, self.spec.logical_action_dim)
 
     @property
     def right_min(self) -> np.ndarray:
-        """Return a fresh read-only float32 ``[31]`` view of right minima."""
-        return _action_vector_from_bytes(self._right_min_bytes)
+        """Return a fresh read-only float32 ``[D]`` view of right minima."""
+        return _action_vector_from_bytes(self._right_min_bytes, self.spec.logical_action_dim)
 
     @property
     def right_max(self) -> np.ndarray:
-        """Return a fresh read-only float32 ``[31]`` view of right maxima."""
-        return _action_vector_from_bytes(self._right_max_bytes)
+        """Return a fresh read-only float32 ``[D]`` view of right maxima."""
+        return _action_vector_from_bytes(self._right_max_bytes, self.spec.logical_action_dim)
 
 
 class BimanualPolicyAdapter:
     """Expose inverse-normalized per-hand policy output on the wire.
 
-    The wrapped policy must return ``left_actions/right_actions[K,31]`` after
+    The wrapped policy must return ``left_actions/right_actions[K,D]`` after
     inverse normalization. Raw model-space ``actions[2*K,32]`` are deliberately
     rejected: dimensional decoding alone cannot establish physical units.
 
@@ -297,7 +312,7 @@ class BimanualPolicyAdapter:
                 ``observation_timestamp_ns`` and non-empty ``clock_domain``.
 
         Returns:
-            A mapping containing ``actions.left/right`` with shape ``[E,31]``
+            A mapping containing ``actions.left/right`` with shape ``[E,D]``
             and float32 dtype, plus ``source_timestamp_ns``, ``clock_domain``,
             an adapter-instance-local monotonic ``chunk_sequence_id``, and the
             adapter-instance ``session_id`` bound into deployment metadata.
@@ -485,15 +500,28 @@ class BimanualActionChunkBroker:
     request passed to a WebSocket client or other remote policy.
     """
 
-    def __init__(self, policy: PolicyLike, *, execution_horizon: int) -> None:
+    def __init__(
+        self,
+        policy: PolicyLike,
+        *,
+        execution_horizon: int,
+        action_representation: ActionRepresentation,
+    ) -> None:
         """Initialize a non-dispatching broker for decoded chunks.
 
-        Directly constructed brokers support ``peek``/``commit`` only. Hardware
-        dispatch requires :meth:`from_metadata`, which binds the complete
-        validated server action contract.
+        Directly constructed brokers support ``peek``/``commit`` only. The
+        representation is still mandatory so a decoded chunk cannot be guessed
+        from width. Hardware dispatch requires :meth:`from_metadata`, which
+        binds the complete validated server action contract.
         """
         self._policy = policy
         self._execution_horizon = _validate_positive_int(execution_horizon, field_name="execution_horizon")
+        if not isinstance(action_representation, ActionRepresentation):
+            raise TypeError(
+                "action_representation: expected ActionRepresentation, "
+                f"got {type(action_representation).__name__}"
+            )
+        self._action_representation = action_representation
         self._action_spec: BimanualActionSpec | None = None
         self._session_id: str | None = None
         self._cached_chunk: _DecodedChunk | None = None
@@ -522,7 +550,11 @@ class BimanualActionChunkBroker:
             validated_spec,
             expected_execution_horizon=expected_execution_horizon,
         )
-        broker = cls(policy, execution_horizon=execution_horizon)
+        broker = cls(
+            policy,
+            execution_horizon=execution_horizon,
+            action_representation=validated_spec.action_representation,
+        )
         broker._action_spec = validated_spec
         broker._session_id = _validate_session_id(
             supplied_metadata["pi_dex"][SESSION_ID_FIELD],
@@ -567,6 +599,7 @@ class BimanualActionChunkBroker:
                 self._cached_chunk = _validate_decoded_chunk(
                     chunk_result,
                     execution_horizon=self._execution_horizon,
+                    logical_action_dim=self._action_representation.logical_action_dim,
                     expected_session_id=self._session_id,
                 )
                 self._step = 0
@@ -744,7 +777,7 @@ class BimanualCommandDispatcher:
             controller: Hardware adapter exposing a trusted clock and atomic
                 single-owner dispatch lease.
             spec: Exact training, wire, and hardware action contract.
-            limits: Closed float32 ``[31]`` bounds in the units of ``spec``.
+            limits: Closed float32 ``[D]`` bounds in the units of ``spec``.
             execution_horizon: Physical horizon obtained from server metadata.
             session_id: Exact server adapter session obtained from the same
                 validated metadata handshake as ``execution_horizon``.
@@ -801,10 +834,26 @@ class BimanualCommandDispatcher:
             max_target_lead_ms=validated_max_target_lead_ms,
         )
 
-        left_min = _immutable_action_vector(limits.left_min, field_name="limits.left_min")
-        left_max = _immutable_action_vector(limits.left_max, field_name="limits.left_max")
-        right_min = _immutable_action_vector(limits.right_min, field_name="limits.right_min")
-        right_max = _immutable_action_vector(limits.right_max, field_name="limits.right_max")
+        left_min = _immutable_action_vector(
+            limits.left_min,
+            field_name="limits.left_min",
+            logical_action_dim=validated_spec.logical_action_dim,
+        )
+        left_max = _immutable_action_vector(
+            limits.left_max,
+            field_name="limits.left_max",
+            logical_action_dim=validated_spec.logical_action_dim,
+        )
+        right_min = _immutable_action_vector(
+            limits.right_min,
+            field_name="limits.right_min",
+            logical_action_dim=validated_spec.logical_action_dim,
+        )
+        right_max = _immutable_action_vector(
+            limits.right_max,
+            field_name="limits.right_max",
+            logical_action_dim=validated_spec.logical_action_dim,
+        )
         self._controller = controller
         self._spec = validated_spec
         self._execution_horizon = validated_execution_horizon
@@ -900,7 +949,7 @@ class BimanualCommandDispatcher:
         """Validate and atomically hand one bimanual command to the controller.
 
         Args:
-            result: Strict v2 paired logical-action step with source timestamp,
+            result: Strict v3 paired logical-action step with source timestamp,
                 clock, chunk identifier, and step index.
             target_timestamp_ns: Future target in the controller's trusted clock.
 
@@ -946,7 +995,7 @@ class BimanualCommandDispatcher:
                     chunk_sequence_id,
                     chunk_step_index,
                     session_id,
-                ) = _extract_dispatch_payload(result)
+                ) = _extract_dispatch_payload(result, spec=self._spec)
                 if clock_domain != self._clock_domain:
                     raise ValueError(
                         f"result clock_domain: expected {self._clock_domain!r}, got {clock_domain!r}"
@@ -1332,7 +1381,7 @@ def _extract_inverse_normalized_chunk(
 
     left_actions = result["left_actions"]
     right_actions = result["right_actions"]
-    expected_shape = (spec.physical_horizon, LOGICAL_ACTION_DIM)
+    expected_shape = (spec.physical_horizon, spec.logical_action_dim)
     canonical_actions: list[np.ndarray] = []
     for field_name, value in (("left_actions", left_actions), ("right_actions", right_actions)):
         if not isinstance(value, np.ndarray):
@@ -1367,6 +1416,7 @@ def _validate_decoded_chunk(
     result: object,
     *,
     execution_horizon: int,
+    logical_action_dim: int,
     expected_session_id: str | None,
 ) -> _DecodedChunk:
     if not isinstance(result, Mapping):
@@ -1396,9 +1446,10 @@ def _validate_decoded_chunk(
         if not isinstance(value, np.ndarray):
             raise TypeError(f"{field_name}: expected numpy.ndarray, got {type(value).__name__}")
         value_snapshot = np.array(value, copy=True, order="C", subok=False)
-        if value_snapshot.shape != (execution_horizon, LOGICAL_ACTION_DIM):
+        expected_shape = (execution_horizon, logical_action_dim)
+        if value_snapshot.shape != expected_shape:
             raise ValueError(
-                f"{field_name}.shape: expected {(execution_horizon, LOGICAL_ACTION_DIM)}, "
+                f"{field_name}.shape: expected {expected_shape}, "
                 f"got {value_snapshot.shape}"
             )
         if value_snapshot.dtype != np.float32:
@@ -1461,6 +1512,8 @@ def _validate_decoded_chunk(
 
 def _extract_dispatch_payload(
     result: object,
+    *,
+    spec: BimanualActionSpec,
 ) -> tuple[np.ndarray, np.ndarray, int, str, int, int, str]:
     if not isinstance(result, Mapping):
         raise TypeError(f"result: expected a mapping, got {type(result).__name__}")
@@ -1478,8 +1531,16 @@ def _extract_dispatch_payload(
         formatted_fields = sorted(repr(field) for field in unsupported_action_fields)
         raise ValueError(f"result['actions']: unsupported fields {formatted_fields}")
     try:
-        left_action = _validate_action_vector(actions_snapshot["left"], field_name="actions.left")
-        right_action = _validate_action_vector(actions_snapshot["right"], field_name="actions.right")
+        left_action = _validate_action_vector(
+            actions_snapshot["left"],
+            field_name="actions.left",
+            logical_action_dim=spec.logical_action_dim,
+        )
+        right_action = _validate_action_vector(
+            actions_snapshot["right"],
+            field_name="actions.right",
+            logical_action_dim=spec.logical_action_dim,
+        )
     except KeyError as error:
         raise KeyError(f"result['actions']: missing required field {error.args[0]!r}") from None
     if SOURCE_TIMESTAMP_FIELD not in result_snapshot:
@@ -1512,8 +1573,9 @@ def _extract_dispatch_payload(
         result_snapshot[SESSION_ID_FIELD],
         field_name=SESSION_ID_FIELD,
     )
-    _validate_rotation_6d(left_action, field_name="actions.left")
-    _validate_rotation_6d(right_action, field_name="actions.right")
+    if spec.action_representation is ActionRepresentation.CARTESIAN_31D:
+        _validate_rotation_6d(left_action, field_name="actions.left")
+        _validate_rotation_6d(right_action, field_name="actions.right")
     return (
         left_action,
         right_action,
@@ -1565,13 +1627,18 @@ def _dispatch_not_after_timestamp_ns(
     return min(source_timestamp_ns + maximum_age_ns, target_timestamp_ns - 1)
 
 
-def _validate_action_vector(value: object, *, field_name: str) -> np.ndarray:
+def _validate_action_vector(
+    value: object,
+    *,
+    field_name: str,
+    logical_action_dim: int,
+) -> np.ndarray:
     if not isinstance(value, np.ndarray):
         raise TypeError(f"{field_name}: expected numpy.ndarray, got {type(value).__name__}")
     value_snapshot = np.array(value, copy=True, order="C", subok=False)
-    if value_snapshot.shape != (LOGICAL_ACTION_DIM,):
+    if value_snapshot.shape != (logical_action_dim,):
         raise ValueError(
-            f"{field_name}.shape: expected {(LOGICAL_ACTION_DIM,)}, got {value_snapshot.shape}"
+            f"{field_name}.shape: expected {(logical_action_dim,)}, got {value_snapshot.shape}"
         )
     if value_snapshot.dtype != np.float32:
         raise TypeError(f"{field_name}.dtype: expected float32, got {value_snapshot.dtype}")
@@ -1579,13 +1646,22 @@ def _validate_action_vector(value: object, *, field_name: str) -> np.ndarray:
     return value_snapshot
 
 
-def _immutable_action_vector(value: object, *, field_name: str) -> np.ndarray:
-    validated = _validate_action_vector(value, field_name=field_name)
-    return _action_vector_from_bytes(validated.tobytes(order="C"))
+def _immutable_action_vector(
+    value: object,
+    *,
+    field_name: str,
+    logical_action_dim: int,
+) -> np.ndarray:
+    validated = _validate_action_vector(
+        value,
+        field_name=field_name,
+        logical_action_dim=logical_action_dim,
+    )
+    return _action_vector_from_bytes(validated.tobytes(order="C"), logical_action_dim)
 
 
-def _action_vector_from_bytes(values: bytes) -> np.ndarray:
-    return np.frombuffer(values, dtype=np.float32, count=LOGICAL_ACTION_DIM)
+def _action_vector_from_bytes(values: bytes, logical_action_dim: int) -> np.ndarray:
+    return np.frombuffer(values, dtype=np.float32, count=logical_action_dim)
 
 
 def _validate_limits(action: np.ndarray, *, lower: np.ndarray, upper: np.ndarray, side: str) -> None:
@@ -1610,7 +1686,7 @@ def _validate_rotation_6d(action: np.ndarray, *, field_name: str) -> None:
 
 def _require_finite(values: np.ndarray, *, field_name: str) -> None:
     if not np.all(np.isfinite(values)):
-        raise ValueError(f"{field_name}: expected all 31 semantic values to be finite")
+        raise ValueError(f"{field_name}: expected all semantic action values to be finite")
 
 
 def _validate_execution_horizon(execution_horizon: object, *, spec: BimanualActionSpec) -> int:

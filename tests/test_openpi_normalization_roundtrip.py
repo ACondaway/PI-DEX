@@ -3,10 +3,11 @@ import types
 import numpy as np
 import pytest
 
-from pi_dex.actions import LOGICAL_ACTION_DIM
+from pi_dex.actions import ActionRepresentation
 from pi_dex.checkpoints import load_and_validate_training_contract
 from pi_dex.checkpoints import save_training_contract
 from pi_dex.spec import BimanualActionSpec
+from tests.helpers import spec_for_representation
 
 openpi_normalize = pytest.importorskip("openpi.shared.normalize")
 openpi_checkpoints = pytest.importorskip("openpi.training.checkpoints")
@@ -14,10 +15,14 @@ openpi_checkpoints = pytest.importorskip("openpi.training.checkpoints")
 ASSET_ID = "sharpa_north_train_v1"
 
 
+@pytest.mark.parametrize("representation", list(ActionRepresentation))
 def test_openpi_normalization_file_round_trip_preserves_checkpoint_contract(
     tmp_path,
     action_spec: BimanualActionSpec,
+    representation: ActionRepresentation,
 ) -> None:
+    action_spec = spec_for_representation(action_spec, representation)
+
     def stats(width: int, offset: float):
         mean = np.arange(width, dtype=np.float32) + offset
         return openpi_normalize.NormStats(
@@ -29,8 +34,8 @@ def test_openpi_normalization_file_round_trip_preserves_checkpoint_contract(
 
     norm_stats = {
         "state": stats(4, 0.0),
-        "left_actions": stats(LOGICAL_ACTION_DIM, 10.0),
-        "right_actions": stats(LOGICAL_ACTION_DIM, 20.0),
+        "left_actions": stats(action_spec.logical_action_dim, 10.0),
+        "right_actions": stats(action_spec.logical_action_dim, 20.0),
     }
     model_config = types.SimpleNamespace(
         pi05=True,

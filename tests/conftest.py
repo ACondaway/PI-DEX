@@ -1,5 +1,6 @@
 import pytest
 
+from pi_dex.actions import ActionRepresentation
 from pi_dex.spec import ActionMode
 from pi_dex.spec import ActionTimebase
 from pi_dex.spec import BimanualActionSpec
@@ -17,6 +18,7 @@ def action_spec() -> BimanualActionSpec:
         embodiment_version="sharpa_north_v1",
         coordinate_frame="north_base_v1",
         action_mode=ActionMode.ABSOLUTE,
+        action_representation=ActionRepresentation.CARTESIAN_31D,
         hand_normalization=HandNormalization.PER_HAND,
         rotation_6d_convention=Rotation6DConvention.MATRIX_FIRST_TWO_COLUMNS_COLUMN_MAJOR,
         kinematics_calibration_version="north_calibration_2026_08",

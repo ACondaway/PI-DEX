@@ -49,7 +49,7 @@ PI-DEX 基于 OpenPI 的 π0.5（源码标识为 `pi05`）和 Sharpa North 机�
 
 ### 4.1 单手逻辑动作
 
-目标单手动作由腕部位置、腕部 6D 连续旋转表示和手指关节角拼接而成：
+PI-DEX 支持两种必须由 `action_representation` 显式选择的单手逻辑动作。Cartesian 版本由腕部位置、腕部 6D 连续旋转表示和手指关节角拼接而成：
 
 $$
 \tilde{a}_{\tau}^{s}
@@ -65,29 +65,40 @@ $$
 - $r_{6D} \in \mathbb{R}^{6}$ 是连续旋转表示，不代表 6 个旋转自由度；
 - $q_{\mathrm{hand}} \in \mathbb{R}^{22}$ 是单手 22 个关节的关节角。
 
-为兼容 π0.5 的 32 维动作投影，逻辑动作在末维补零：
+Joint 版本直接保留标定过的 commanded arm/hand joint targets：
+
+$$
+\tilde{a}_{\tau,\mathrm{joint}}^{s}
+= [q_{\tau,\mathrm{arm}}^{s};\ q_{\tau,\mathrm{hand}}^{s}]
+\in \mathbb{R}^{7+22}
+= \mathbb{R}^{29}.
+$$
+
+为兼容 π0.5 的 32 维动作投影，两种逻辑动作都在末维补零：Cartesian 补 1 维，Joint 补 3 维。
 
 $$
 a_{\tau}^{s} = \operatorname{pad}_{32}(\tilde{a}_{\tau}^{s})
-= [\tilde{a}_{\tau}^{s}; 0] \in \mathbb{R}^{32}.
+\in \mathbb{R}^{32}.
 $$
 
-第 32 维没有机器人语义，推理解码时必须丢弃。补零和解包必须集中在唯一的动作转换模块中；归一化和损失实现必须复用该模块声明的有效维度或 mask，不得各自硬编码索引。当前固定流程先对每手 31 个有效维度归一化，再补第 32 维零值，因此 normalization asset 只保存 `[31]` 统计量且无需 padding 统计量；若未来改为对已 padding 的 32 维张量归一化，才必须为 padding 维补中性统计量。padding 维不得参与损失；若未来改变此约束，必须明确记录并用测试固定该行为。
+模型向量中逻辑宽度之后的 suffix 没有机器人语义，推理解码时必须全部丢弃。补零和解包必须集中在唯一的动作转换模块中；归一化和损失实现必须复用该模块声明的有效维度或 mask，不得各自硬编码索引。当前固定流程先对每手 31 或 29 个有效维度归一化，再补到 32 维，因此 normalization asset 只保存 `[31]` 或 `[29]` 统计量且无需 padding 统计量。padding 维不得参与损失；若未来改变此约束，必须明确记录并用测试固定该行为。
 
 ### 4.2 数据原始动作与派生动作
 
-`data/schema.json` 中的原始控制指令（commanded action）并不是上述 31 维末端动作。每侧字段主要是：
+`data/schema.json` 中的原始控制指令（commanded action）并不是上述 31 维末端动作；它本身可组成 29 维 Joint 动作。每侧字段主要是：
 
 - `action/<side>_arm/joint_angle`：7 维手臂关节命令；
 - `action/<side>_hand/joint_angle`：22 维手部关节命令。
 
-31 维动作是项目的**目标派生表示**。从关节命令生成腕部位置和 6D 旋转时，必须明确并验证：
+Cartesian 31 维动作是项目的**派生表示**；Joint 29 维动作则直接拼接上述两个 commanded action group。选择 Cartesian 时，从关节命令生成腕部位置和 6D 旋转必须明确并验证：
 
 - 正向运动学模型和机器人标定版本；
 - 世界坐标系、基座坐标系或末端坐标系；
 - 旋转表示的定义、分量顺序和转换实现；
 - 动作是绝对量、相对量还是 residual；
 - 单位、关节顺序及左右手镜像规则。
+
+选择 Joint 时不得构造或调用 FK，也不得用 measured state 替换 commanded action；仍必须校验 absolute/delta 语义、单位、关节顺序、左右手映射、provenance、时间轴和对齐。Joint spec 中只属于 Cartesian/FK 的坐标系、rotation-6D、标定版本和左右 wrist link 字段必须为 `None`，不得填写无意义占位值；metadata 必须保留这些显式空值以便严格校验。
 
 不得把可选的 `state/<side>_arm/tcp_pose` 直接当成控制指令。该字段只有 6 维、旋转约定尚需消歧，而且部分数据可能全零；使用前必须检查存在性和有效性。
 
@@ -101,7 +112,7 @@ a_{t+K-1}^L, a_{t+K-1}^R]
 \in \mathbb{R}^{2K \times 32}.
 $$
 
-对采用上述双手交错编码的 PI-DEX 配置，模型 action horizon 定义为 $H_{model}=2K$，因此必须为偶数。该约束不适用于 OpenPI 原有的非交错配置。每个物理控制时刻的有效双手动作是 62 维，在模型中占用两个 32 维连续动作槽位。除非特指网络投影后的内部表示，不要把这些连续动作向量称为 “action token”。
+对采用上述双手交错编码的 PI-DEX 配置，模型 action horizon 定义为 $H_{model}=2K$，因此必须为偶数。该约束不适用于 OpenPI 原有的非交错配置。每个物理控制时刻的有效双手动作在 Cartesian/Joint 模式下分别是 62/58 维，在模型中都占用两个 32 维连续动作槽位。除非特指网络投影后的内部表示，不要把这些连续动作向量称为 “action token”。
 
 当前 OpenPI 数据加载器默认把 horizon 解释为连续时间步，并不具备左右手交错语义。实现 PI-DEX 时必须提供成对的：
 
@@ -199,7 +210,7 @@ $$
 
 动作与数据管线至少覆盖：
 
-- 31D ↔ 32D 的补零和解包；
+- 31D/29D ↔ 32D 的补零和解包；
 - 左右手交错与解交错的往返一致性；
 - horizon、shape、dtype、单位和 padding 不变量；
 - 非严格 `2:1` 时间轴下的 `aligned_index`；
@@ -232,8 +243,8 @@ uv run pre-commit run --files <changed-files>
 ```bash
 uv lock
 uv sync --locked --extra pytorch
-uv run --locked ruff check src tests
-uv run --locked ruff format --check src tests
+uv run --locked ruff check src scripts tests
+uv run --locked ruff format --check src scripts tests
 uv run --locked pytest tests -m "not manual"
 ```
 
@@ -245,6 +256,10 @@ uv run --with-editable .. python -c "import pi_dex"
 ```
 
 ## 8. 标准工作流
+
+服务器端接管未完成训练、部署或硬件工作时，先阅读 `docs/server-handoff.md` 获取实施顺序，
+再按 `docs/pytorch.md` 的语义契约编码，并将目标服务器验证结果写入
+`docs/server-validation.md` 的记录模板。接管文档是当前 roadmap，不代表其中项目已经完成。
 
 1. 先阅读相关实现、相邻测试、配置和 `data/schema.json`；不要仅根据文件名猜测行为。
 2. 在编码前写清输入、输出、shape、时间轴、坐标系和失败条件。

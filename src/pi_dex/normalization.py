@@ -14,7 +14,6 @@ from typing import Any
 
 import numpy as np
 
-from pi_dex.actions import LOGICAL_ACTION_DIM
 from pi_dex.spec import BimanualActionSpec
 from pi_dex.spec import HandNormalization
 
@@ -35,7 +34,8 @@ def validate_normalization_stats(
         norm_stats: Mapping whose values expose ``mean``, ``std``, ``q01``, and
             ``q99`` either as attributes or mapping entries. Every statistic must
             be a finite, one-dimensional floating NumPy array. Action statistics
-            have shape ``[31]``; state statistics share one non-empty shape.
+            have shape ``[spec.logical_action_dim]``; state statistics share one
+            non-empty shape.
         spec: PI-DEX semantic contract. Shared-hand normalization additionally
             requires all left/right action statistics to be exactly equal after
             canonical float64 conversion.
@@ -138,7 +138,7 @@ def _canonicalize_normalization_stats(
 
     canonical: dict[str, dict[str, np.ndarray]] = {}
     for key in expected_keys:
-        expected_shape = None if key == "state" else (LOGICAL_ACTION_DIM,)
+        expected_shape = None if key == "state" else (validated_spec.logical_action_dim,)
         canonical[key] = _canonicalize_stats_entry(norm_stats[key], key=key, expected_shape=expected_shape)
 
     if validated_spec.hand_normalization is HandNormalization.SHARED:

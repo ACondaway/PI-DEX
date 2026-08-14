@@ -5,21 +5,25 @@ import pytest
 
 from pi_dex.actions import HAND_JOINT_DIM
 from pi_dex.actions import LOGICAL_ACTION_DIM
+from pi_dex.actions import ActionRepresentation
 from pi_dex.sharpa_data import ARM_JOINT_DIM
 from pi_dex.sharpa_data import AlignedTimeline
 from pi_dex.sharpa_data import CommandedJointGroup
 from pi_dex.sharpa_data import EpisodeActionProvenance
 from pi_dex.sharpa_data import HandSide
 from pi_dex.sharpa_data import derive_bimanual_logical_action_chunk
+from pi_dex.sharpa_data import derive_joint_actions
 from pi_dex.sharpa_data import derive_logical_actions
 from pi_dex.sharpa_data import select_commanded_joint_horizon
 from pi_dex.spec import ActionMode
 from pi_dex.spec import ActionTimebase
 from pi_dex.spec import BimanualActionSpec
+from tests.helpers import spec_for_representation
 
 BASE_TIME_S = 1_800_000_000.0
 RAW_PERIOD_S = 1.0 / 59.4
 ALIGNED_PERIOD_S = 2.0 * RAW_PERIOD_S
+_DEFAULT_KINEMATICS = object()
 
 
 class FakeKinematics:
@@ -113,8 +117,15 @@ def derive_chunk(
     *,
     timeline: AlignedTimeline | None = None,
     provenance: EpisodeActionProvenance | None = None,
+    kinematics: object = _DEFAULT_KINEMATICS,
 ):
     left_arm, left_hand, right_arm, right_hand = groups
+    if kinematics is _DEFAULT_KINEMATICS:
+        kinematics = (
+            FakeKinematics()
+            if action_spec.action_representation is ActionRepresentation.CARTESIAN_31D
+            else None
+        )
     return derive_bimanual_logical_action_chunk(
         aligned_timeline=timeline or make_timeline(),
         provenance=provenance or make_provenance(),
@@ -124,7 +135,7 @@ def derive_chunk(
         right_hand=right_hand,
         start_aligned_frame=np.int32(1),
         spec=action_spec,
-        kinematics=FakeKinematics(),
+        kinematics=kinematics,
     )
 
 
@@ -272,6 +283,38 @@ def test_derive_bimanual_chunk_uses_each_groups_own_alignment(action_spec: Biman
     assert chunk.source_aligned_frame == 1
 
 
+def test_joint_chunk_preserves_selected_commanded_arm_then_hand_columns(
+    action_spec: BimanualActionSpec,
+) -> None:
+    joint_spec = spec_for_representation(action_spec, ActionRepresentation.JOINT_29D)
+    groups = make_groups()
+
+    chunk = derive_chunk(joint_spec, groups)
+
+    left_arm, left_hand, right_arm, right_hand = groups
+    expected_left = np.concatenate(
+        (left_arm.joint_angles[[2, 3]], left_hand.joint_angles[[3, 4]]),
+        axis=-1,
+    )
+    expected_right = np.concatenate(
+        (right_arm.joint_angles[[2, 3]], right_hand.joint_angles[[3, 4]]),
+        axis=-1,
+    )
+    assert chunk.left_actions.shape == (
+        joint_spec.physical_horizon,
+        joint_spec.logical_action_dim,
+    )
+    assert chunk.right_actions.shape == (
+        joint_spec.physical_horizon,
+        joint_spec.logical_action_dim,
+    )
+    assert chunk.left_actions.dtype == np.float32
+    assert chunk.right_actions.dtype == np.float32
+    np.testing.assert_array_equal(chunk.left_actions, expected_left)
+    np.testing.assert_array_equal(chunk.right_actions, expected_right)
+    np.testing.assert_allclose(chunk.timestamps_s, left_arm.time[[2, 3], 0])
+
+
 def test_derive_aligned_chunk_uses_canonical_timestamps(
     action_spec: BimanualActionSpec,
 ) -> None:
@@ -287,6 +330,48 @@ def test_derive_aligned_chunk_uses_canonical_timestamps(
     np.testing.assert_array_equal(chunk.timestamps_s, timeline.time[1:3, 0])
     assert chunk.left_actions.shape == (2, LOGICAL_ACTION_DIM)
     assert chunk.right_actions.shape == (2, LOGICAL_ACTION_DIM)
+
+
+def test_derive_aligned_joint_chunk_uses_each_groups_recorded_indices(
+    action_spec: BimanualActionSpec,
+) -> None:
+    joint_spec = dataclasses.replace(
+        spec_for_representation(action_spec, ActionRepresentation.JOINT_29D),
+        timebase=ActionTimebase.ALIGNED_30_HZ,
+        control_frequency_hz=29.7,
+    )
+    timeline = make_timeline()
+    groups = make_groups()
+
+    chunk = derive_chunk(joint_spec, groups, timeline=timeline)
+
+    left_arm, left_hand, right_arm, right_hand = groups
+    np.testing.assert_array_equal(
+        chunk.left_actions,
+        np.concatenate(
+            (left_arm.joint_angles[[2, 4]], left_hand.joint_angles[[3, 5]]),
+            axis=-1,
+        ),
+    )
+    np.testing.assert_array_equal(
+        chunk.right_actions,
+        np.concatenate(
+            (right_arm.joint_angles[[2, 4]], right_hand.joint_angles[[3, 5]]),
+            axis=-1,
+        ),
+    )
+    np.testing.assert_array_equal(chunk.timestamps_s, timeline.time[1:3, 0])
+
+
+def test_cartesian_chunk_requires_fk_and_joint_chunk_forbids_it(
+    action_spec: BimanualActionSpec,
+) -> None:
+    with pytest.raises(TypeError, match="explicit calibrated"):
+        derive_chunk(action_spec, make_groups(), kinematics=None)
+
+    joint_spec = spec_for_representation(action_spec, ActionRepresentation.JOINT_29D)
+    with pytest.raises(ValueError, match=r"kinematics.*None.*JOINT_29D"):
+        derive_chunk(joint_spec, make_groups(), kinematics=FakeKinematics())
 
 
 def test_derive_chunk_rejects_cross_group_timestamp_skew(action_spec: BimanualActionSpec) -> None:
@@ -336,26 +421,38 @@ def test_derive_chunk_rejects_group_with_wrong_role(action_spec: BimanualActionS
         derive_chunk(action_spec, (right_arm, left_hand, left_arm, right_hand))
 
 
-def test_derive_chunk_rejects_hand_columns_out_of_spec_order(
+@pytest.mark.parametrize(
+    "action_representation",
+    [ActionRepresentation.CARTESIAN_31D, ActionRepresentation.JOINT_29D],
+)
+def test_derive_chunk_rejects_hand_columns_out_of_spec_order_in_both_representations(
     action_spec: BimanualActionSpec,
+    action_representation: ActionRepresentation,
 ) -> None:
+    representation_spec = spec_for_representation(action_spec, action_representation)
     left_arm, left_hand, right_arm, right_hand = make_groups()
     left_hand = dataclasses.replace(left_hand, joint_order=tuple(reversed(left_hand.joint_order)))
 
     with pytest.raises(ValueError, match=r"left_hand.*joint_order"):
-        derive_chunk(action_spec, (left_arm, left_hand, right_arm, right_hand))
+        derive_chunk(representation_spec, (left_arm, left_hand, right_arm, right_hand))
 
 
-def test_derive_chunk_rejects_wrong_hand_mapping_provenance(
+@pytest.mark.parametrize(
+    "action_representation",
+    [ActionRepresentation.CARTESIAN_31D, ActionRepresentation.JOINT_29D],
+)
+def test_derive_chunk_rejects_wrong_hand_mapping_provenance_in_both_representations(
     action_spec: BimanualActionSpec,
+    action_representation: ActionRepresentation,
 ) -> None:
+    representation_spec = spec_for_representation(action_spec, action_representation)
     provenance = dataclasses.replace(
         make_provenance(),
         hand_mapping_version="sharpa_north_hand_mapping_v2",
     )
 
     with pytest.raises(ValueError, match=r"provenance\.hand_mapping_version"):
-        derive_chunk(action_spec, make_groups(), provenance=provenance)
+        derive_chunk(representation_spec, make_groups(), provenance=provenance)
 
 
 def test_derive_chunk_rejects_group_n_different_from_canonical(action_spec: BimanualActionSpec) -> None:
@@ -417,6 +514,69 @@ def test_derive_actions_rejects_non_absolute_semantics(action_spec: BimanualActi
 
     with pytest.raises(ValueError, match="only derive absolute"):
         derive_left_actions(arm, hand, delta_spec, FakeKinematics())
+
+
+def test_joint_chunk_rejects_non_absolute_semantics(action_spec: BimanualActionSpec) -> None:
+    joint_delta_spec = dataclasses.replace(
+        spec_for_representation(action_spec, ActionRepresentation.JOINT_29D),
+        action_mode=ActionMode.DELTA,
+    )
+
+    with pytest.raises(ValueError, match="only derive absolute"):
+        derive_chunk(joint_delta_spec, make_groups())
+
+
+def test_direct_joint_actions_preserve_declared_column_order(
+    action_spec: BimanualActionSpec,
+) -> None:
+    joint_spec = spec_for_representation(action_spec, ActionRepresentation.JOINT_29D)
+    arm = np.arange(
+        joint_spec.physical_horizon * ARM_JOINT_DIM,
+        dtype=np.float32,
+    ).reshape(joint_spec.physical_horizon, ARM_JOINT_DIM)
+    hand = np.arange(
+        joint_spec.physical_horizon * HAND_JOINT_DIM,
+        dtype=np.float32,
+    ).reshape(joint_spec.physical_horizon, HAND_JOINT_DIM)
+
+    actions = derive_joint_actions(
+        HandSide.LEFT,
+        arm,
+        hand,
+        provenance=make_provenance(),
+        arm_joint_order=joint_spec.left_arm_joint_order,
+        hand_joint_order=joint_spec.left_hand_joint_order,
+        spec=joint_spec,
+    )
+
+    assert actions.shape == (
+        joint_spec.physical_horizon,
+        joint_spec.logical_action_dim,
+    )
+    assert actions.dtype == np.float32
+    np.testing.assert_array_equal(actions[:, :ARM_JOINT_DIM], arm)
+    np.testing.assert_array_equal(actions[:, ARM_JOINT_DIM:], hand)
+
+
+def test_representation_specific_direct_derivers_reject_the_other_layout(
+    action_spec: BimanualActionSpec,
+) -> None:
+    joint_spec = spec_for_representation(action_spec, ActionRepresentation.JOINT_29D)
+    arm = np.zeros((action_spec.physical_horizon, ARM_JOINT_DIM), dtype=np.float32)
+    hand = np.zeros((action_spec.physical_horizon, HAND_JOINT_DIM), dtype=np.float32)
+
+    with pytest.raises(ValueError, match="derive_logical_actions requires"):
+        derive_left_actions(arm, hand, joint_spec, FakeKinematics())
+    with pytest.raises(ValueError, match="derive_joint_actions requires"):
+        derive_joint_actions(
+            HandSide.LEFT,
+            arm,
+            hand,
+            provenance=make_provenance(),
+            arm_joint_order=action_spec.left_arm_joint_order,
+            hand_joint_order=action_spec.left_hand_joint_order,
+            spec=action_spec,
+        )
 
 
 def test_derive_actions_rejects_wrong_robot_calibration(action_spec: BimanualActionSpec) -> None:

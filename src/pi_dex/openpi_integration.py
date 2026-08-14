@@ -14,7 +14,6 @@ from typing import Any
 
 import numpy as np
 
-from pi_dex.actions import LOGICAL_ACTION_DIM
 from pi_dex.actions import MODEL_ACTION_DIM
 from pi_dex.checkpoints import CHECKPOINT_METADATA_FILENAME
 from pi_dex.checkpoints import MODEL_WEIGHTS_FILENAME
@@ -435,10 +434,11 @@ def configure_bimanual_data(
 
     Returns:
         A dataclass-replaced OpenPI ``DataConfig``. A final data transform checks
-        unbatched ``state[D]`` and optional per-hand ``[K,31]`` targets before
-        normalization. On training input, normalized targets are packed after
-        existing model transforms. On inference output, model actions are
-        unpacked before unnormalization.
+        unbatched ``state[D]`` and optional per-hand
+        ``[K, spec.logical_action_dim]`` targets before normalization. On
+        training input, normalized targets are packed after existing model
+        transforms. On inference output, model actions are unpacked before
+        unnormalization.
 
     Raises:
         TypeError: If ``data_config`` does not expose an OpenPI-like transform
@@ -446,9 +446,9 @@ def configure_bimanual_data(
         ValueError: If the model config conflicts with ``spec``.
 
     Notes:
-        The normalization stats must be defined over the 31D fields
-        ``left_actions`` and ``right_actions``. Do not compute statistics over the
-        packed 32D representation.
+        The normalization stats must be defined over the selected logical fields
+        ``left_actions`` and ``right_actions``. Do not compute statistics over
+        the packed 32D representation.
     """
     validated_spec = _validated_spec_copy(spec)
     openpi_model_contract_metadata(model_config, validated_spec)
@@ -484,6 +484,10 @@ def configure_bimanual_data(
             raise ValueError(
                 "data_config.data_transforms: PI-DEX sample validator physical horizon conflicts with spec"
             )
+        if validator.action_representation is not validated_spec.action_representation:
+            raise ValueError(
+                "data_config.data_transforms: PI-DEX sample validator action representation conflicts with spec"
+            )
         if state_dim is not None and validator.state_dim not in (None, state_dim):
             raise ValueError(
                 "data_config.data_transforms: PI-DEX sample validator state width conflicts with stats"
@@ -491,7 +495,11 @@ def configure_bimanual_data(
         if state_dim is not None and validator.state_dim is None:
             configured_inputs = (
                 *existing_data_inputs[:-1],
-                ValidateBimanualSample(validated_spec.physical_horizon, state_dim=state_dim),
+                ValidateBimanualSample(
+                    physical_horizon=validated_spec.physical_horizon,
+                    action_representation=validated_spec.action_representation,
+                    state_dim=state_dim,
+                ),
             )
             configured_data_transforms = dataclasses.replace(
                 data_transforms,
@@ -503,7 +511,8 @@ def configure_bimanual_data(
         configured_data_transforms = data_transforms.push(
             inputs=[
                 ValidateBimanualSample(
-                    validated_spec.physical_horizon,
+                    physical_horizon=validated_spec.physical_horizon,
+                    action_representation=validated_spec.action_representation,
                     state_dim=state_dim,
                 )
             ]
@@ -525,6 +534,15 @@ def configure_bimanual_data(
                 "data_config.model_transforms: PI-DEX pack/unpack must be the final input "
                 "and sole output transform"
             )
+        pack_transform = existing_inputs[-1]
+        unpack_transform = existing_outputs[0]
+        if (
+            pack_transform.action_representation is not validated_spec.action_representation
+            or unpack_transform.action_representation is not validated_spec.action_representation
+        ):
+            raise ValueError(
+                "data_config.model_transforms: PI-DEX pack/unpack action representation conflicts with spec"
+            )
         configured_model_transforms = model_transforms
     elif pack_count or unpack_count:
         raise ValueError(
@@ -538,8 +556,16 @@ def configure_bimanual_data(
             )
 
         configured_model_transforms = model_transforms.push(
-            inputs=[PackBimanualActions()],
-            outputs=[UnpackBimanualActions()],
+            inputs=[
+                PackBimanualActions(
+                    action_representation=validated_spec.action_representation,
+                )
+            ],
+            outputs=[
+                UnpackBimanualActions(
+                    action_representation=validated_spec.action_representation,
+                )
+            ],
         )
     if configured_data_transforms is data_transforms and configured_model_transforms is model_transforms:
         return data_config
@@ -569,9 +595,10 @@ def create_pytorch_data_loader_from_dataset(
     Args:
         dataset: Random-access dataset yielding unbatched dictionaries. After its
             repack/data transforms, each sample must expose ``left_actions`` and
-            ``right_actions`` as floating NumPy arrays with shape ``[K, 31]`` in
-            the units and frame declared by ``spec``. The dataset—not OpenPI's
-            standard LeRobot loader—owns physical-time horizon selection.
+            ``right_actions`` as floating NumPy arrays with shape
+            ``[K, spec.logical_action_dim]`` in the units and frame declared by
+            ``spec``. The dataset—not OpenPI's standard LeRobot loader—owns
+            physical-time horizon selection.
         data_factory: PI-DEX-decorated OpenPI data factory. Requiring the factory
             ensures transforms are materialized from this exact model config.
         assets_dirs: OpenPI configuration-assets root forwarded to the factory.
@@ -693,7 +720,8 @@ def compute_bimanual_normalization_stats(
     Args:
         dataset: Random-access dataset yielding raw, unbatched dictionaries.
             After repack/data transforms, ``state`` must be a finite floating
-            vector shaped ``[D]`` and each hand target is ``[K,31]``.
+            vector shaped ``[D]`` and each hand target is
+            ``[K, spec.logical_action_dim]``.
         data_config: OpenPI ``DataConfig``. Only repack and data input transforms
             are applied; normalization and model transforms are intentionally not.
         spec: Contract selecting per-hand or shared statistics.
@@ -701,8 +729,9 @@ def compute_bimanual_normalization_stats(
 
     Returns:
         A mapping containing ``state``, ``left_actions``, and ``right_actions``
-        OpenPI ``NormStats``. Every action statistic has exactly 31 values. In
-        shared mode both hand keys reference equal pooled statistics.
+        OpenPI ``NormStats``. Every action statistic has exactly
+        ``spec.logical_action_dim`` values. In shared mode both hand keys
+        reference equal pooled statistics.
 
     Raises:
         TypeError: If transformed samples or arrays have invalid types/dtypes.
@@ -761,13 +790,13 @@ def compute_bimanual_normalization_stats(
             transformed,
             "left_actions",
             sample_index=sample_index,
-            expected_shape=(validated_spec.physical_horizon, LOGICAL_ACTION_DIM),
+            expected_shape=(validated_spec.physical_horizon, validated_spec.logical_action_dim),
         )
         right_actions = _require_stats_array(
             transformed,
             "right_actions",
             sample_index=sample_index,
-            expected_shape=(validated_spec.physical_horizon, LOGICAL_ACTION_DIM),
+            expected_shape=(validated_spec.physical_horizon, validated_spec.logical_action_dim),
         )
         if left_actions.dtype != right_actions.dtype:
             raise TypeError(
