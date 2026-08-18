@@ -97,6 +97,11 @@ bash scripts/prepare_task_dataset.sh \
 
 随后用 `scripts/train_ddp.sh --dataset-root .../prepared/Insert_Battery --robot-id POC22005 ...`。
 
+**Cadence：** Sharpa 原始控制约 59.4 Hz。Insert_Battery 与 OpenData 都会出现一次漏拍
+（相邻 dt 误差 **16.835 ms**），从未观察到两次漏拍（>20 ms）。reviewed contract 因此把
+`max_control_period_error_ms` / `max_alignment_timestamp_error_ms` /
+`max_group_timestamp_skew_ms` 设为 **20.0**。8 ms 会把 Insert_Battery 也拒掉。
+
 推荐环境变量：
 
 ```bash
@@ -190,9 +195,12 @@ pi-dex-train-pytorch \
 
 ### 6.2 全量 train split 索引构建
 
-`validate-data` / `compute-norm-stats` / `train` 在过滤 split 后都会
-`build_sample_index`：对每个 episode **打开一次 HDF5**，检查动作窗是否装得下 K 步。
-全量约 3 万+ episode，墙钟可能很长，请用 `nohup` / `tmux` 并写日志：
+`validate-data` / `train` 在过滤 split 后会 `build_sample_index`：对每个 episode
+**打开一次 HDF5**，并按 cadence 探测能装下 K 步的 start。全量约 3 万+ episode，
+墙钟可能很长，请用 `nohup` / `tmux` 并写日志。
+
+`compute-norm-stats` **不再走这条慢路径**：按 episode 向量化抽 `state` / 双手
+动作（不解码图像），并用 `--norm-workers` 多进程分片。见 §7。
 
 ```bash
 mkdir -p "${PI_DEX_ARTIFACTS}/logs" "${PI_DEX_ARTIFACTS}/dataset"
@@ -215,11 +223,51 @@ nohup pi-dex-train-pytorch \
 
 ## 7. 步骤 ④ 计算 norm stats（全量准备的核心）
 
-只在 **train split** 上统计；val/test 不得泄漏进 stats。
+只在 **train split** 上统计；val/test 不得泄漏进 stats。实现原理、本机吞吐和与旧
+Insert_Battery 文件的对照见 [norm-compute.md](norm-compute.md)。
 
-### 7.1 全量（推荐正式训练）
+### 7.1 火山引擎（推荐）
 
-一键 nohup（inventory 已有则跳过，直接算 train-split stats）：
+norm 是**单 Python 进程**（不要用 `volc_ddp_train.sh` / torchrun），但进程内会按
+episode 开 CPU worker 并行读 HDF5。平台侧 **1 节点 × 1 进程**，优先高核 CPU；
+GPU 闲置也没关系。
+
+默认 `NORM_WORKERS` 为空时，Python 使用 `min(cpu_count, 64)`。脚本把
+`OMP_NUM_THREADS` / `MKL_NUM_THREADS` / `OPENBLAS_NUM_THREADS` 设为 1，避免
+每个 worker 再开 BLAS 线程把核打满。需要覆盖时：
+
+```bash
+export NORM_WORKERS=16          # 本机 VEFS 实测约 16 饱和；或省略自动选
+export NORM_STRIDE=1            # 正式统计必须为 1
+```
+
+MLP **自定义启动命令**：
+
+```bash
+bash /mnt/netdata/Team/Personal/congsheng/PI-DEX/scripts/volc_compute_norm.sh
+```
+
+可选：把 `configs/volc/opendata_norm.env` 配进任务环境。多 worker 时只有 `MLP_ROLE_INDEX=0` 会跑，其余直接退出。
+
+本地 dry-run：
+
+```bash
+set -a; source configs/volc/opendata_norm.env; set +a
+VOLC_DRY_RUN=1 bash scripts/volc_compute_norm.sh
+```
+
+无 MLP 变量时：`VOLC_SKIP_MLP=1 bash scripts/volc_compute_norm.sh`。
+
+产物：
+
+```text
+${ASSETS_DIR}/${ASSET_ID}/norm_stats.json
+${PI_DEX_ARTIFACTS}/dataset/norm_opendata_full.json
+```
+
+已存在则拒绝覆盖，除非 `NORM_FORCE=1`。
+
+### 7.2 本机 nohup（不推荐长时间占开发机）
 
 ```bash
 source /mnt/netdata/Team/Personal/congsheng/miniconda/etc/profile.d/conda.sh
@@ -229,17 +277,6 @@ cd /mnt/netdata/Team/Personal/congsheng/PI-DEX
 nohup bash scripts/prepare_opendata_full.sh \
   > /mnt/netdata/Team/Personal/congsheng/pi-dex-artifacts/logs/prepare_opendata_full.nohup.log 2>&1 &
 echo "PID=$!"
-
-# 跟日志
-tail -f /mnt/netdata/Team/Personal/congsheng/pi-dex-artifacts/logs/prepare_opendata_full.nohup.log
-# 或: tail -f .../logs/norm_opendata_full.log
-```
-
-产物：
-
-```text
-${ASSETS_DIR}/${ASSET_ID}/norm_stats.json
-${PI_DEX_ARTIFACTS}/dataset/norm_opendata_full.json
 ```
 
 手动等价命令：
@@ -263,19 +300,20 @@ nohup pi-dex-train-pytorch \
 内容包含 OpenPI quantile 字段：`state`、`left_actions`、`right_actions`（各宽 29 的
 action stats；padding 维不参与）。
 
-### 7.2 调试：限制样本数
+### 7.3 调试：限制样本数
 
 ```bash
-# 仍扫全库建 index，但只拿前 N 个 sample 估 stats（更快，非正式）
+# 快路径只扫前 N 个有效 window（不建全库 index），非正式
 pi-dex-train-pytorch ... --mode compute-norm-stats \
   --max-samples 4096 \
+  --norm-workers 8 \
   --asset-id sharpa_joint_29d_opendata_debug4096 \
   ...
 ```
 
 或 `--max-episodes 64` 只取 discover 顺序下的前 64 个 train episode（有偏，仅管道测试）。
 
-### 7.3 为何必须换 asset_id
+### 7.4 为何必须换 asset_id
 
 | 场景 | asset_id 建议 |
 |------|----------------|

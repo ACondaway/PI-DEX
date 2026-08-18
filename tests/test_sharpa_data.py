@@ -428,6 +428,44 @@ def test_derive_chunk_rejects_irregular_raw_control_cadence(
         derive_chunk(action_spec, tuple(irregular_groups))
 
 
+def test_joint29d_contract_accepts_one_skipped_raw_tick() -> None:
+    """Insert_Battery / OpenData routinely skip one 59.4 Hz tick (~16.835 ms)."""
+    from pathlib import Path
+
+    from pi_dex.observation_contract import load_observation_contract
+    from pi_dex.training_runner import build_joint_spec_from_contract
+
+    contract = load_observation_contract(
+        Path(__file__).resolve().parents[1] / "configs/site/joint_29d_observation.unreviewed.json"
+    )
+    spec = build_joint_spec_from_contract(
+        contract,
+        robot_id="POC22005",
+        embodiment_version="sharpa_north_v1",
+        command_semantics_version="sharpa_sdk_commanded_joint_position_absolute_v1",
+        hand_mapping_version="sharpa_north_hand_mapping_v1",
+        clock_domain="unix_realtime",
+    )
+    raw_length = 20
+    aligned = np.arange(0, raw_length, 2, dtype=np.int32)
+    group = make_group(
+        "action/left_arm/joint_angle",
+        raw_length=raw_length,
+        aligned_index=aligned,
+    )
+    skipped = group.time.copy()
+    skipped[7:, 0] += RAW_PERIOD_S
+    group = dataclasses.replace(group, time=skipped)
+    selected = select_commanded_joint_horizon(group, start_aligned_frame=1, spec=spec)
+    assert selected.joint_angles.shape == (spec.physical_horizon, ARM_JOINT_DIM)
+
+    two_skips = group.time.copy()
+    two_skips[7:, 0] += RAW_PERIOD_S
+    group_two = dataclasses.replace(group, time=two_skips)
+    with pytest.raises(ValueError, match="control-period error"):
+        select_commanded_joint_horizon(group_two, start_aligned_frame=1, spec=spec)
+
+
 def test_derive_chunk_rejects_group_with_wrong_role(action_spec: BimanualActionSpec) -> None:
     left_arm, left_hand, right_arm, right_hand = make_groups()
 

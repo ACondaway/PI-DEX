@@ -114,6 +114,7 @@ pi-dex-artifacts/
 |------|------|
 | `physical_horizon` / `K` | 每手动作窗长度；模型 `action_horizon = 2K` |
 | `control_frequency_hz` / `timebase` | 与 HDF5 `aligned_index` 对齐的时间基准 |
+| `max_*_timestamp_*_ms` / `max_control_period_error_ms` | 时间戳容差；joint_29d 为 **20 ms**（允许漏一拍 ~16.8 ms，与 Insert_Battery 一致） |
 | `state_columns` | 拼成 `state` 向量的路径与 slice（当前 65D） |
 | `image_slots` | Sharpa 相机 → OpenPI `base_0_rgb` / `left_wrist_0_rgb` / `right_wrist_0_rgb` |
 | `prompt_policy` | 从 `anno.json` 取 `tags.task_instruction` |
@@ -152,6 +153,9 @@ pi-dex-artifacts/
 | `--seed` | `0` | 样本顺序与 dataloader 种子；resume 必须一致 |
 | `--distributed` | off | 强制 DDP；`torchrun` 设置了 `RANK`/`WORLD_SIZE` 时也会自动开 |
 | `--max-episodes` / `--max-samples` | | 调试截断 |
+| `--norm-workers` | `min(cpu, 64)` 或 `NORM_WORKERS` | `compute-norm-stats` 的 CPU 进程数；`1` 为进程内串行 |
+| `--norm-stride` | `1` | 每隔 N 个有效 start 取一个；正式统计必须为 1 |
+| `--norm-legacy` | off | 走旧 Dataset+JPEG 路径（仅调试） |
 | `--allow-unreviewed-contract` | | 允许未审阅 contract（数据校验等） |
 | `--allow-unreviewed-train-smoke` | | 与上一项同时开才允许未审阅 `train`（仅管道烟测） |
 | `--robot-id` 等 | 见 CLI help | 写入 `BimanualActionSpec` 的本体 / 语义版本 / `clock_domain` |
@@ -236,7 +240,8 @@ pi-dex-train-pytorch \
   --output-json "${PI_DEX_ARTIFACTS}/runs/norm.json"
 ```
 
-产物：`${ASSETS_DIR}/${ASSET_ID}/norm_stats.json`。
+默认按 episode 向量化抽 `state` / 双手动作（不解码图像），并用 CPU 多进程并行。
+产物：`${ASSETS_DIR}/${ASSET_ID}/norm_stats.json`。调试旧路径可加 `--norm-legacy`。
 
 ### 4.4 单机短训（功能测试）
 
@@ -524,7 +529,8 @@ python -m pi_dex.parity_pi05 ...    # JAX↔PT sample_actions 对比
 |------|------|
 | `pi-dex-train-pytorch` | 单机 / 被 torchrun 拉起的训练 |
 | `scripts/train_ddp.sh` | 通用 1..N 节点 × 1..M 卡启动 |
-| `pi-dex-volc-train` / `scripts/volc_ddp_train.sh` | 火山 MLP → torchrun |
+| `pi-dex-volc-train` / `scripts/volc_ddp_train.sh` | 火山 MLP → torchrun 训练 |
+| `scripts/volc_compute_norm.sh` | 火山 / 本机 compute-norm-stats（进程内多 CPU worker；见 [norm-compute.md](norm-compute.md)） |
 | `scripts/prepare_task_dataset.sh` / `pi-dex-prepare-dataset` | 任务数据 overlay + inventory + norm |
 | `pi-dex-realtime-infer` | 真机推理（非训练；见 realtime 模块） |
 | `pi-dex-serve` / `scripts/serve_joint29d.sh` | joint_29d WebSocket model server |
@@ -533,6 +539,7 @@ python -m pi_dex.parity_pi05 ...    # JAX↔PT sample_actions 对比
 | `scripts/setup_inference_env.sh` | 推理机环境（详见 [inference-env.md](inference-env.md)） |
 | `scripts/export_inference_lock.sh` | 从当前开发 env 导出 pip-lock |
 | `configs/site/joint_29d_observation.reviewed.json` | 数据契约 |
-| `configs/volc/joint_29d_ddp.example.env` | 多机环境变量样例 |
+| `configs/volc/joint_29d_ddp.example.env` | 多机训练环境变量样例 |
+| `configs/volc/opendata_norm.env` | 全量 OpenData norm 环境变量样例 |
 
 正式大规模放行前，仍建议按 [server-validation.md](server-validation.md) 阶段 B.1/B.2/D 留存命令、日志与制品哈希；本文命令可复现实验，本身不等于验收 PASS。

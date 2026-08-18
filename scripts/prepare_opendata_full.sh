@@ -17,8 +17,13 @@ cd "${ROOT}"
 : "${ASSETS_DIR:=${PI_DEX_ARTIFACTS}/assets-opendata}"
 : "${ASSET_ID:=sharpa_joint_29d_opendata_v0}"
 : "${OPENPI_DATA_HOME:=${PI_DEX_ARTIFACTS}/openpi-data}"
+: "${NORM_WORKERS:=}"
+: "${OMP_NUM_THREADS:=1}"
+: "${MKL_NUM_THREADS:=1}"
+: "${OPENBLAS_NUM_THREADS:=1}"
 
 export OPENPI_DATA_HOME
+export OMP_NUM_THREADS MKL_NUM_THREADS OPENBLAS_NUM_THREADS
 
 mkdir -p "${PI_DEX_ARTIFACTS}/dataset" "${PI_DEX_ARTIFACTS}/logs" "${ASSETS_DIR}"
 
@@ -49,6 +54,12 @@ fi
 
 echo "[$(date -Is)] compute-norm-stats (train split, full OpenData) ..."
 echo "[$(date -Is)] detailed log: ${NORM_LOG}"
+echo "  NORM_WORKERS=${NORM_WORKERS:-<auto>} OMP_NUM_THREADS=${OMP_NUM_THREADS}"
+
+NORM_ARGS=()
+if [[ -n "${NORM_WORKERS}" ]]; then
+  NORM_ARGS+=(--norm-workers "${NORM_WORKERS}")
+fi
 
 pi-dex-train-pytorch \
   --action-representation joint_29d \
@@ -60,6 +71,7 @@ pi-dex-train-pytorch \
   --assets-dir "${ASSETS_DIR}" \
   --asset-id "${ASSET_ID}" \
   --output-json "${NORM_JSON}" \
+  "${NORM_ARGS[@]}" \
   2>&1 | tee -a "${NORM_LOG}"
 
 echo "[$(date -Is)] prepare_opendata_full done"

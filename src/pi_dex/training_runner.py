@@ -100,6 +100,14 @@ def run(context: PytorchTrainingLaunchContext) -> int:
         episodes = filter_episodes_for_split(episodes, contract=contract, split=split)
     if args.max_episodes is not None:
         episodes = episodes[: args.max_episodes]
+    if args.mode == "compute-norm-stats" and not args.norm_legacy:
+        return _run_compute_norm_stats_fast(
+            episodes=episodes,
+            spec=spec,
+            contract=contract,
+            provenance=provenance,
+            args=args,
+        )
     sample_index = build_sample_index(
         episodes,
         spec=spec,
@@ -165,11 +173,9 @@ def build_joint_spec_from_contract(
         left_wrist_link=None,
         right_wrist_link=None,
         clock_domain=clock_domain,
-        # SharpaOpenData raw@~60Hz vs aligned@~30Hz routinely shows ~1 control tick
-        # (~16.8 ms) of command/canonical offset and occasional skipped ticks.
-        max_group_timestamp_skew_ms=20.0,
-        max_alignment_timestamp_error_ms=20.0,
-        max_control_period_error_ms=20.0,
+        max_group_timestamp_skew_ms=float(contract.max_group_timestamp_skew_ms),
+        max_alignment_timestamp_error_ms=float(contract.max_alignment_timestamp_error_ms),
+        max_control_period_error_ms=float(contract.max_control_period_error_ms),
         max_observation_age_ms=50.0,
         max_command_lead_ms=25.0,
     )
@@ -203,16 +209,51 @@ def _run_validate_data(
     return 0
 
 
+def _run_compute_norm_stats_fast(
+    *,
+    episodes: Sequence,
+    spec: BimanualActionSpec,
+    contract: SharpaObservationContract,
+    provenance: EpisodeActionProvenance,
+    args: argparse.Namespace,
+) -> int:
+    asset_id, assets_root = _norm_assets_target(args)
+    try:
+        from openpi.shared import normalize as openpi_normalize
+
+        from pi_dex.norm_compute import compute_joint29d_normalization_stats
+        from pi_dex.norm_compute import resolve_norm_workers
+    except ImportError as error:
+        raise ImportError(
+            "compute-norm-stats with OpenPI quantile assets requires the OpenPI stack "
+            "(use the openpi uv env with editable pi-dex). Root conda alone is insufficient."
+        ) from error
+
+    workers = resolve_norm_workers(args.norm_workers)
+    norm_stats, meta = compute_joint29d_normalization_stats(
+        episodes,
+        spec=spec,
+        contract=contract,
+        provenance=provenance,
+        max_samples=args.max_samples,
+        workers=workers,
+        stride=args.norm_stride,
+    )
+    return _write_norm_stats_payload(
+        args=args,
+        spec=spec,
+        asset_id=asset_id,
+        assets_root=assets_root,
+        norm_stats=norm_stats,
+        extra=meta,
+        save=openpi_normalize.save,
+    )
+
+
 def _run_compute_norm_stats(
     *, dataset: SharpaJoint29dDataset, spec: BimanualActionSpec, args: argparse.Namespace
 ) -> int:
-    asset_id = args.asset_id or "sharpa_joint_29d"
-    assets_root = pathlib.Path(args.assets_dir) if args.assets_dir else None
-    if assets_root is None and args.output_json:
-        assets_root = pathlib.Path(args.output_json).resolve().parent / "assets"
-    if assets_root is None:
-        raise ValueError("compute-norm-stats requires --assets-dir or --output-json to place assets/")
-
+    asset_id, assets_root = _norm_assets_target(args)
     try:
         from openpi.shared import normalize as openpi_normalize
 
@@ -240,17 +281,48 @@ def _run_compute_norm_stats(
         spec,
         max_samples=args.max_samples,
     )
+    sample_count = len(dataset) if args.max_samples is None else min(len(dataset), args.max_samples)
+    return _write_norm_stats_payload(
+        args=args,
+        spec=spec,
+        asset_id=asset_id,
+        assets_root=assets_root,
+        norm_stats=norm_stats,
+        extra={"samples": sample_count, "path": "legacy_dataset"},
+        save=openpi_normalize.save,
+    )
+
+
+def _norm_assets_target(args: argparse.Namespace) -> tuple[str, pathlib.Path]:
+    asset_id = args.asset_id or "sharpa_joint_29d"
+    assets_root = pathlib.Path(args.assets_dir) if args.assets_dir else None
+    if assets_root is None and args.output_json:
+        assets_root = pathlib.Path(args.output_json).resolve().parent / "assets"
+    if assets_root is None:
+        raise ValueError("compute-norm-stats requires --assets-dir or --output-json to place assets/")
+    return asset_id, assets_root
+
+
+def _write_norm_stats_payload(
+    *,
+    args: argparse.Namespace,
+    spec: BimanualActionSpec,
+    asset_id: str,
+    assets_root: pathlib.Path,
+    norm_stats: Any,
+    extra: Mapping[str, Any],
+    save: Any,
+) -> int:
     target = assets_root / asset_id
     target.mkdir(parents=True, exist_ok=True)
-    openpi_normalize.save(target, norm_stats)
-    sample_count = len(dataset) if args.max_samples is None else min(len(dataset), args.max_samples)
+    save(target, norm_stats)
     payload = {
         "mode": "compute-norm-stats",
-        "samples": sample_count,
         "asset_id": asset_id,
         "assets_dir": str(assets_root),
         "norm_stats_path": str(target / "norm_stats.json"),
         "logical_action_dim": spec.logical_action_dim,
+        **extra,
     }
     _write_json(args.output_json, payload)
     print(json.dumps(payload, indent=2))
@@ -967,6 +1039,23 @@ def _parse_runner_args(argv: Sequence[str]) -> argparse.Namespace:
     )
     parser.add_argument("--max-episodes", type=int, default=None)
     parser.add_argument("--max-samples", type=int, default=None)
+    parser.add_argument(
+        "--norm-workers",
+        type=int,
+        default=None,
+        help="CPU processes for compute-norm-stats (default: NORM_WORKERS or min(cpu, 64))",
+    )
+    parser.add_argument(
+        "--norm-stride",
+        type=int,
+        default=1,
+        help="Keep every Nth valid start window when computing norm stats (default 1)",
+    )
+    parser.add_argument(
+        "--norm-legacy",
+        action="store_true",
+        help="Use the slow Dataset+image path for compute-norm-stats (debug only)",
+    )
     parser.add_argument("--allow-unreviewed-contract", action="store_true")
     parser.add_argument(
         "--allow-unreviewed-train-smoke",
@@ -1011,4 +1100,8 @@ def _parse_runner_args(argv: Sequence[str]) -> argparse.Namespace:
         raise ValueError("--save-interval must be >= 0")
     if args.log_interval <= 0:
         raise ValueError("--log-interval must be >= 1")
+    if args.norm_stride < 1:
+        raise ValueError("--norm-stride must be >= 1")
+    if args.norm_workers is not None and args.norm_workers < 1:
+        raise ValueError("--norm-workers must be >= 1")
     return args

@@ -8,6 +8,9 @@
   "physical_horizon": 8,
   "timebase": "raw_control_60_hz",
   "control_frequency_hz": 59.4,
+  "max_group_timestamp_skew_ms": 20.0,
+  "max_alignment_timestamp_error_ms": 20.0,
+  "max_control_period_error_ms": 20.0,
   "episode_tail_policy": "reject_incomplete_horizon",
   "state_columns": [
     {

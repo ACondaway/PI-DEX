@@ -213,6 +213,9 @@ class SharpaObservationContract:
     physical_horizon: int
     timebase: ActionTimebase
     control_frequency_hz: float
+    max_group_timestamp_skew_ms: float
+    max_alignment_timestamp_error_ms: float
+    max_control_period_error_ms: float
     episode_tail_policy: EpisodeTailPolicy
     state_columns: tuple[StateColumn, ...]
     image_slots: tuple[ImageSlotMapping, ...]
@@ -247,6 +250,16 @@ class SharpaObservationContract:
             raise TypeError("control_frequency_hz: expected a number")
         if float(self.control_frequency_hz) <= 0.0:
             raise ValueError(f"control_frequency_hz: expected positive, got {self.control_frequency_hz!r}")
+        for field_name in (
+            "max_group_timestamp_skew_ms",
+            "max_alignment_timestamp_error_ms",
+            "max_control_period_error_ms",
+        ):
+            value = getattr(self, field_name)
+            if type(value) is not float and type(value) is not int:
+                raise TypeError(f"{field_name}: expected a number")
+            if float(value) <= 0.0:
+                raise ValueError(f"{field_name}: expected positive, got {value!r}")
         if not self.state_columns:
             raise ValueError("state_columns: expected at least one reviewed column")
         if len(self.image_slots) != len(OPENPI_IMAGE_KEYS):
@@ -318,6 +331,15 @@ class SharpaObservationContract:
             raise ValueError(
                 f"control_frequency_hz mismatch: contract={self.control_frequency_hz} spec={spec.control_frequency_hz}"
             )
+        for field_name in (
+            "max_group_timestamp_skew_ms",
+            "max_alignment_timestamp_error_ms",
+            "max_control_period_error_ms",
+        ):
+            contract_value = float(getattr(self, field_name))
+            spec_value = float(getattr(spec, field_name))
+            if abs(contract_value - spec_value) > 1e-9:
+                raise ValueError(f"{field_name} mismatch: contract={contract_value} spec={spec_value}")
 
 
 def load_observation_contract(path: str | pathlib.Path) -> SharpaObservationContract:
@@ -352,6 +374,9 @@ def observation_contract_from_mapping(payload: Mapping[str, Any]) -> SharpaObser
         physical_horizon=_require_int(payload, "physical_horizon"),
         timebase=ActionTimebase(_require_str(payload, "timebase")),
         control_frequency_hz=float(_require_number(payload, "control_frequency_hz")),
+        max_group_timestamp_skew_ms=float(_require_number(payload, "max_group_timestamp_skew_ms")),
+        max_alignment_timestamp_error_ms=float(_require_number(payload, "max_alignment_timestamp_error_ms")),
+        max_control_period_error_ms=float(_require_number(payload, "max_control_period_error_ms")),
         episode_tail_policy=EpisodeTailPolicy(_require_str(payload, "episode_tail_policy")),
         state_columns=state_columns,
         image_slots=image_slots,
@@ -390,6 +415,9 @@ def observation_contract_to_mapping(contract: SharpaObservationContract) -> dict
         "physical_horizon": contract.physical_horizon,
         "timebase": contract.timebase.value,
         "control_frequency_hz": contract.control_frequency_hz,
+        "max_group_timestamp_skew_ms": contract.max_group_timestamp_skew_ms,
+        "max_alignment_timestamp_error_ms": contract.max_alignment_timestamp_error_ms,
+        "max_control_period_error_ms": contract.max_control_period_error_ms,
         "episode_tail_policy": contract.episode_tail_policy.value,
         "state_columns": [
             {

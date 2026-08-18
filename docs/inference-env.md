@@ -123,6 +123,24 @@ north_observation → inference/action
 3. 从端：启动 Zenoh 桥（需与机器人同 Zenoh 域；已装 `eclipse-zenoh`）
 4. Pendant：`F6` → 推理，`F2` → moving（人盯急停）
 
+### 5.0 从训练制品导出推理包（开发机）
+
+训练 step 目录里有 `optimizer.pt`（约 13G）等 serve 用不到的文件。在开发机抽出最小集合：
+
+```bash
+bash scripts/export_inference_bundle.sh \
+  --run-dir "${PI_DEX_ARTIFACTS}/runs/sharpa_joint_29d_insert_battery-20260817-083004"
+# 或显式步目录：
+# bash scripts/export_inference_bundle.sh --checkpoint-dir .../20000
+```
+
+默认写到 `${PI_DEX_ARTIFACTS}/exports/<run>-step<N>/`（同盘硬链 `model.safetensors`，几乎不占额外空间）。
+把**整个** export 目录 rsync/scp 到推理机。布局与启动命令见该目录 `README.md`。
+
+不要拷：`optimizer.pt`、HDF5、converted `pi05_base`。必须带：`ckpt/model.safetensors`、
+`ckpt/pi_dex.json`、`ckpt/assets/<asset_id>/norm_stats.json`、
+`openpi-data/big_vision/paligemma_tokenizer.model`、reviewed contract。
+
 ### 5.1 GPU：model server
 
 ```bash
@@ -185,6 +203,7 @@ pi-dex-serve-probe --host 127.0.0.1 --port 8000
 | `configs/inference/pip-lock.txt` | 冻结第三方依赖 |
 | `scripts/setup_inference_env.sh` | 推理机安装入口 |
 | `scripts/export_inference_lock.sh` | 开发机导出 lock |
+| `scripts/export_inference_bundle.sh` | 从训练 step 抽出推理包（权重 + tokenizer + contract） |
 | `scripts/serve_joint29d.sh` | GPU serve 包装 |
 | `scripts/robot_client_joint29d.sh` | 从端桥包装 |
 | [pytorch.md](pytorch.md) §6 | 协议与 wire 细节 |

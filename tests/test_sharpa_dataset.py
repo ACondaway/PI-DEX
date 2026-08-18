@@ -96,3 +96,4 @@ def test_build_joint_spec_matches_contract() -> None:
     )
     contract.validate_against_action_spec(spec)
     assert spec.requires_forward_kinematics is False
+    assert spec.max_control_period_error_ms == 20.0

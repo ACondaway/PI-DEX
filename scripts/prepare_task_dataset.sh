@@ -28,6 +28,10 @@ cd "${ROOT}"
 : "${OVERWRITE_PREPARED:=0}"
 : "${SKIP_NORM:=0}"
 : "${ROBOT_ID:=}"
+: "${NORM_WORKERS:=}"
+: "${OMP_NUM_THREADS:=1}"
+: "${MKL_NUM_THREADS:=1}"
+: "${OPENBLAS_NUM_THREADS:=1}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -82,6 +86,7 @@ if [[ -z "${ROBOT_ID}" ]]; then
 fi
 
 export OPENPI_DATA_HOME
+export OMP_NUM_THREADS MKL_NUM_THREADS OPENBLAS_NUM_THREADS
 export PATH="${PATH:-}"
 
 mkdir -p "${PI_DEX_ARTIFACTS}/dataset" "${PI_DEX_ARTIFACTS}/logs" "${ASSETS_DIR}"
@@ -127,6 +132,10 @@ if [[ -f "${ASSETS_DIR}/${ASSET_ID}/norm_stats.json" ]]; then
 fi
 
 echo "[$(date -Is)] compute-norm-stats ..."
+NORM_ARGS=()
+if [[ -n "${NORM_WORKERS}" ]]; then
+  NORM_ARGS+=(--norm-workers "${NORM_WORKERS}")
+fi
 pi-dex-train-pytorch \
   --action-representation joint_29d \
   --runner pi_dex.training_runner:run -- \
@@ -138,6 +147,7 @@ pi-dex-train-pytorch \
   --asset-id "${ASSET_ID}" \
   --robot-id "${ROBOT_ID}" \
   --output-json "${NORM_JSON}" \
+  "${NORM_ARGS[@]}" \
   2>&1 | tee -a "${NORM_LOG}"
 
 echo "[$(date -Is)] prepare_task_dataset done"

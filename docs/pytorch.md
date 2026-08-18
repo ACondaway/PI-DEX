@@ -48,7 +48,7 @@ spec = BimanualActionSpec(
     clock_domain="<shared-runtime-clock-domain>",
     max_group_timestamp_skew_ms=2.0,
     max_alignment_timestamp_error_ms=2.0,
-    max_control_period_error_ms=8.0,
+    max_control_period_error_ms=8.0,  # unit-test / Cartesian default; joint_29d site contract uses 20.0
     max_observation_age_ms=50.0,
     max_command_lead_ms=25.0,
 )

@@ -3,11 +3,14 @@
   "contract_id": "sharpa_north_joint_29d_observation_v0",
   "review_status": "reviewed",
   "reviewed_by": "congsheng",
-  "review_notes": "Reviewed 2026-08-15 via coding-agent handoff: data owner confirmed candidate fields (K=8, raw_control_60_hz @ 59.4 Hz, state columns 65D, head/stereo/lefteye→base_0_rgb with righteye unused, wrist fisheyes, anno.json task_instruction prompts, episode_hash_stratified_by_task splits). Fourth head view remains unused by explicit policy. Closed-loop joint_29d training may use this file. Cartesian and multi-node are out of scope for this contract.",
+  "review_notes": "Reviewed 2026-08-15 via coding-agent handoff: data owner confirmed candidate fields (K=8, raw_control_60_hz @ 59.4 Hz, state columns 65D, head/stereo/lefteye→base_0_rgb with righteye unused, wrist fisheyes, anno.json task_instruction prompts, episode_hash_stratified_by_task splits). Fourth head view remains unused by explicit policy. Closed-loop joint_29d training may use this file. Cartesian and multi-node are out of scope for this contract. Cadence: Insert_Battery / OpenData raw@59.4 Hz routinely skip one control tick (~16.835 ms); timestamp tolerances are 20 ms so that one skipped tick is accepted and two are not.",
   "action_representation": "joint_29d",
   "physical_horizon": 8,
   "timebase": "raw_control_60_hz",
   "control_frequency_hz": 59.4,
+  "max_group_timestamp_skew_ms": 20.0,
+  "max_alignment_timestamp_error_ms": 20.0,
+  "max_control_period_error_ms": 20.0,
   "episode_tail_policy": "reject_incomplete_horizon",
   "state_columns": [
     {

@@ -47,6 +47,9 @@ def test_unreviewed_site_contract_loads_but_blocks_training(action_spec) -> None
         physical_horizon=contract.physical_horizon,
         timebase=ActionTimebase.RAW_CONTROL_60_HZ,
         control_frequency_hz=contract.control_frequency_hz,
+        max_group_timestamp_skew_ms=contract.max_group_timestamp_skew_ms,
+        max_alignment_timestamp_error_ms=contract.max_alignment_timestamp_error_ms,
+        max_control_period_error_ms=contract.max_control_period_error_ms,
     )
     contract.validate_against_action_spec(joint_spec)
 

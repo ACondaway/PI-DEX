@@ -57,4 +57,5 @@ extend-exclude = ["openpi"]
 "src/pi_dex/robot_client.py" = ["PLC0415"]
 # Optional HDF5/Pillow/OpenPI imports stay local so base env without those extras still imports.
 "src/pi_dex/sharpa_dataset.py" = ["PLC0415"]
+"src/pi_dex/norm_compute.py" = ["PLC0415"]
 "src/pi_dex/training_runner.py" = ["PLC0415"]
