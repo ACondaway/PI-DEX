@@ -1,4 +1,6 @@
 .venv/
+.tools/
+.uv/
 __pycache__/
 *.py[cod]
 .pytest_cache/
@@ -11,3 +13,6 @@ build/
 checkpoints/
 outputs/
 wandb/
+# local conda leftovers if someone creates env inside the repo
+.env/
+.conda/

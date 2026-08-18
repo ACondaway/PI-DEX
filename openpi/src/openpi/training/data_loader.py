@@ -7,7 +7,6 @@ from typing import Literal, Protocol, SupportsIndex, TypeVar
 
 import jax
 import jax.numpy as jnp
-import lerobot.common.datasets.lerobot_dataset as lerobot_dataset
 import numpy as np
 import torch
 
@@ -131,6 +130,10 @@ def create_torch_dataset(
     data_config: _config.DataConfig, action_horizon: int, model_config: _model.BaseModelConfig
 ) -> Dataset:
     """Create a dataset for training."""
+    # Lazy import: PI-DEX custom K-step datasets never need LeRobot, and the
+    # OpenPI-pinned lerobot revision is awkward to install via plain pip.
+    import lerobot.common.datasets.lerobot_dataset as lerobot_dataset
+
     repo_id = data_config.repo_id
     if repo_id is None:
         raise ValueError("Repo ID is not set. Cannot create dataset.")

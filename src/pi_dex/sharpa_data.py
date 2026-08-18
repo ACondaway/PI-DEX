@@ -855,8 +855,10 @@ def _validate_time_array(values: object, *, field_name: str, expected_length: in
     invalid_rows = np.flatnonzero(values[:, 1] != 1.0)
     if invalid_rows.size:
         raise ValueError(f"{field_name}[:,1]: invalid rows {invalid_rows.tolist()}; expected validity flag 1.0")
-    if np.any(np.diff(values[:, 0]) <= 0):
-        raise ValueError(f"{field_name}[:,0]: expected strictly increasing timestamps")
+    # Sharpa OpenData camera timelines can contain duplicate timestamps (diff == 0).
+    # Reject only true regressions so real episodes stay loadable.
+    if np.any(np.diff(values[:, 0]) < 0):
+        raise ValueError(f"{field_name}[:,0]: expected monotonically non-decreasing timestamps")
 
 
 def _validate_aligned_index(values: object, *, field_name: str, raw_length: int) -> None:

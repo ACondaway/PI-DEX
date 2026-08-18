@@ -3,7 +3,7 @@
 本文是服务器端后续开发的执行入口，记录剩余工作、实施顺序、固定决策和完成标准。它不是测试
 报告；任何 `PASS` 必须按 [服务器验证清单](server-validation.md) 在目标服务器留下命令、日志和
 制品哈希。实现语义以 [PyTorch 训练与部署契约](pytorch.md) 和
-[开发规范](../AGENT.md) 为准。
+[开发规范](agent.md) 为准。
 
 ## 1. 接管时的仓库状态
 
@@ -12,15 +12,19 @@
 训练闭环。接管 agent 必须先重新核对实际 Git commit 和工作树，不能把本文编写时的本地状态
 当成服务器上的事实。
 
-当前明确的阻断项如下：
+当前明确的剩余项如下：
 
-- 根目录尚无已提交的 `uv.lock`；在生成、审阅并提交之前，锁定环境验证保持 `BLOCKED`；
-- 没有 first-party Sharpa HDF5 observation dataset 和完整 PyTorch runner；
-- 没有受控的 `pi05_base` JAX/Orbax→PyTorch 转换与 parity 验收入口；
-- 没有保存完整训练状态的 checkpoint manager；
-- 没有可信 Sharpa FK/标定、生产服务入口、Sharpa SDK controller 或硬件急停实现；
-- 本地开发阶段没有安装训练环境，也没有执行 Python、GPU、训练或硬件测试；已有测试代码不能
-  被描述为已通过。
+- **大规模多节点 / DDP**：已提供 `DistributedSampler` + DDP wrap + rank-0 checkpoint，以及
+  火山引擎 MLP 入口（`pi-dex-volc-train` / `scripts/volc_ddp_train.sh`）。首个闭环仍可单机
+  运行；多机正式放行需按验证清单阶段 D（分片、global batch、rank-0 ckpt、resume）留证。
+- observation contract 已审阅：`configs/site/joint_29d_observation.reviewed.json`
+  （`reviewed_by=congsheng`）。未审阅模板仍保留供对比测试。
+- `pi05_base` 转换 + `parity_pi05` 轨迹对比已有本地证据；验证清单 A.2 仍缺发布方**预期**
+  source manifest 批准与正式留证流程。
+- 真机推理入口已落地（`pi-dex-realtime-infer` / `pi_dex.realtime_*`）；完整
+  `BimanualController` 租约 / 急停 / 硬件 harness（阶段 4–6）仍未完成。
+- Cartesian / FK 未开始。
+- B.1/B.2 完整质量验收（held-out 指标、overfit 阈值登记）尚未按验证清单闭环记 PASS。
 
 ## 2. 已固定的技术决策
 
@@ -40,7 +44,9 @@
    `joint_29d`/`cartesian_31d` 是 launcher 的 representation 值，不是 OpenPI config 名；仓库
    当前还没有 first-party、已注册的 PI-DEX `TrainConfig` 名。除站点审阅的 `K` 外，当前
    `create_pi05_model_config` 默认固定 `bfloat16`、`gemma_2b`、`gemma_300m` 和
-   `max_token_len=200`。两种模式只有这些语义字段和 `K` 完全一致时才能共享 converted base；
+   `max_token_len=448`（按全量 SharpaOpenData pi0.5 tokenize 扫描覆盖最长指令；旧实验若
+   仍用 200 须在 config 中显式写出）。两种模式只有这些语义字段和 `K` 完全一致时才能共享
+   converted base；
    compile mode 虽不进入语义指纹，也必须作为运行参数记录。
    Runner 必须在构造模型前要求 `TrainConfig.pytorch_training_precision == model.dtype`：可部署
    训练两者均为 `bfloat16`，独立 float32 诊断两者均为 `float32`；不得像 stock runner 一样在
@@ -51,8 +57,10 @@
    不得共享 normalization asset、训练 checkpoint、`asset_id` 或 `pi_dex.json`。
 8. 当前可部署 checkpoint 必须声明 `bfloat16`。float32 可用于独立诊断，但不能进入当前部署
    验收。
-9. 首个闭环限定为单机、单进程、单 GPU。当前 PI-DEX loader 会拒绝已初始化的 DDP；上游
-   PyTorch 路径也不支持 LoRA、FSDP、EMA 或 mixed-precision/AMP 训练。
+9. 单机单进程仍是默认路径；多机 DDP 通过 torchrun / 火山 MLP 入口启用（``--distributed`` 或
+   ``RANK``/``WORLD_SIZE``）。``--batch-size`` 为 **local** batch；global batch =
+   local × world_size。仅 rank-0 原子发布 checkpoint。上游 PyTorch 路径仍不支持 LoRA、
+   FSDP、EMA 或 mixed-precision/AMP 训练。
 
 ## 3. 接管顺序
 

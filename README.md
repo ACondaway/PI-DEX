@@ -6,7 +6,8 @@ PI-DEX 是面向 Sharpa North 双手灵巧操作的研究代码，基于 OpenPI 
 [服务器接管说明](docs/server-handoff.md)，再按
 [PyTorch 训练与部署契约](docs/pytorch.md) 实现，并使用
 [服务器、GPU 与硬件验证清单](docs/server-validation.md) 留存证据。三份文档分别回答“下一步做什么”、
-“实现必须满足什么语义”和“如何证明已经完成”，不能互相替代。
+“实现必须满足什么语义”和“如何证明已经完成”，不能互相替代。完整文档列表见
+[docs/README.md](docs/README.md)。
 
 当前版本为 `0.1.0` 研究预览；`pi_dex` 公共 Python API 均为实验性接口。动作数值布局、metadata schema、checkpoint 和 wire 语义通过独立版本及严格字段校验拒绝不兼容输入，但数据集 factory、FK provider 和 controller lease 协议预期在 Sharpa SDK 与真实数据接入时替换或收窄；升级时必须按文档迁移，不应依赖未记录的实现细节。
 
@@ -22,22 +23,31 @@ PI-DEX 是面向 Sharpa North 双手灵巧操作的研究代码，基于 OpenPI 
 - 按所选有效宽度 31/29 计算的逐手/共享归一化统计，以及 normalization asset 指纹；
 - 保持 OpenPI 原始 `PI0Pytorch` 与 checkpoint shape 不变的 padding-neutral 训练核心；
 - `pi-dex-train-pytorch` 动作表示选择与外部 `module:callable` runner 接缝；
+- first-party Sharpa `joint_29d` HDF5 dataset（JPEG EOI、state、双手 `[K,29]` actions）与
+  `pi_dex.training_runner`（validate-data / compute-norm-stats / train / synthetic-smoke）；
+- 多节点 DDP（``DistributedSampler``、rank-0 checkpoint）与火山引擎入口
+  （``pi-dex-volc-train`` / ``scripts/volc_ddp_train.sh``）；
+- 真机推理适配（``pi-dex-realtime-infer``：SDK observation → policy → NorthDirect action dict）；
+- WebSocket model server（``pi-dex-serve``：GPU 侧收 obs / 回 action；机侧保留 Zenoh）；
+- 从端 Zenoh 桥（``pi-dex-robot-client``：配 ``start.sh`` + F6 推理，订阅
+  ``north_observation``、发布 ``inference/action``）；
+- 受控 convert wrapper（`python -m pi_dex.convert_pi05`）、strict weight load
+  （`load_verified_pi05_base`）与最小训练 checkpoint manager；
 - checkpoint 对 action、OpenPI 模型/tokenizer 配置、真实权重文件与 normalization asset 的指纹绑定，以及 PyTorch policy 加载；其中 tokenizer 仅绑定配置，实际 model 文件字节仍属下述外部边界；
 - 只发布已反归一化物理动作的服务 adapter；
 - 带 `peek/commit` 确认、客户端 observation 快照、chunk 序列/控制周期、可信 controller 时钟、唯一 lease、抗前跳/回拨的原子时间窗、不可变限幅，以及 recovery epoch 故障锁定的双手 dispatch 协议。
 
-当前明确未实现：
+当前明确未实现或不在范围内：
 
-- `pi05_base` 的受控下载、JAX/Orbax→PyTorch 转换、权重覆盖率与 JAX/PyTorch parity
-  验收；两种 Sharpa 表示默认都应从该 base 初始化，不能随机初始化；
-- Sharpa North 的 URDF/MJCF、FK 和机器人标定；
-- 完整 HDF5 图像/触觉 observation dataset；
-- first-party Sharpa HDF5 dataset/完整 training runner、DDP loader/lifecycle 和完整
-  checkpoint manager；现有 launcher 校验表示/FK 依赖、强制 spec/FK 成功握手并委托外部
-  runner，不等于端到端训练；
+- FSDP / LoRA / AMP（DDP 已支持：torchrun + ``pi-dex-volc-train``）；
+- 完整 ``BimanualController`` 租约 / 急停 / 硬件验收（SDK↔policy 推理入口、
+  ``pi-dex-serve`` 与 Zenoh 桥已有；lease / e-stop / watchdog 仍缺）；
+- `pi05_base` 发布方预期 manifest 批准与验证清单 A.2 正式留证；
+- Sharpa North 的 URDF/MJCF、FK 和机器人标定（cartesian_31d）；
+- B.1/B.2 完整质量验收阈值与 held-out 指标闭环；
+- 服务、控制器与硬件（阶段 6）；
 - delta/residual action 的数据派生和训练；当前 commanded-joint 数据路径只接受
-  `ActionMode.ABSOLUTE`，配置字段能表达其他模式不代表实现支持它们；
-- Sharpa 控制 SDK 适配、真实硬件原子下发、急停与 safe-hold 实现；
+  `ActionMode.ABSOLUTE`；
 - 快系统和外部触觉编码器接入。
 
 Checkpoint 起点固定为官方 `gs://openpi-assets/checkpoints/pi05_base`。`pi05_droid` 只允许作为
@@ -56,6 +66,18 @@ OpenPI/WebSocket/硬件验证清单见
 启动接缝显式选择一种表示：
 
 ```bash
+# 开发环境（miniconda，见 environment.yml）
+source /mnt/netdata/Team/Personal/congsheng/miniconda/etc/profile.d/conda.sh
+conda activate pi-dex
+# 首次或依赖变更：bash scripts/setup_conda_env.sh
+
+# 推理机环境（对齐开发机）：见 docs/inference-env.md
+# bash scripts/setup_inference_env.sh --install-miniconda
+```
+
+启动接缝显式选择一种表示：
+
+```bash
 # 直接关节动作：禁止 FK
 pi-dex-train-pytorch \
   --action-representation joint_29d \
@@ -69,13 +91,26 @@ pi-dex-train-pytorch \
   -- --config /server/path/train.yaml
 ```
 
+根包日常验证：
+
+```bash
+conda activate pi-dex
+ruff check src scripts tests
+ruff format --check src scripts tests
+pytest tests -m "not manual"
+```
+
+vendored `openpi/` 仍保留其上游 uv 工具链；根目录 PI-DEX 开发环境改用 miniconda（`environment.yml`），不再使用根 `uv.lock`。
 `--` 后的参数原样交给外部 runner。runner 必须先用
 `context.bind_action_spec(spec)` 绑定实际贯穿数据、OpenPI、loss、checkpoint 和部署的同一份
 spec；Cartesian 还必须通过 `context.create_kinematics()` 获取 FK。若成功返回前未完成这些
 握手，launcher 会拒绝退出为成功。示例中的 module、callable 和路径都是占位符；仓库
 尚未提供可替换它们的 first-party HDF5 runner。这些缺口不会使用 `state/*/tcp_pose`、假定
 `2*k` 对齐、伪造 FK、跳过反归一化或顺序写左右手来掩盖。PyTorch 集成说明见
-[docs/pytorch.md](docs/pytorch.md)。项目约束以 [AGENT.md](AGENT.md) 为准。
+[docs/pytorch.md](docs/pytorch.md)。项目约束以 [docs/agent.md](docs/agent.md) 为准。
+训练 / 数据 / 推理环境分别见 [docs/training.md](docs/training.md)、
+[docs/dataset.md](docs/dataset.md)、[docs/inference-env.md](docs/inference-env.md)。
+文档索引：[docs/README.md](docs/README.md)。
 
 当前 action `layout_version=3`、`metadata_schema_version=3`，部署 wire 为 v3。v3 在固定
 32D 模型投影内绑定所选 31D/29D 表示及有效 mask；旧 v2 metadata/checkpoint/wire 必须

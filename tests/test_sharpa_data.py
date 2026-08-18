@@ -209,12 +209,12 @@ def test_group_constructor_rejects_nonmonotonic_aligned_index() -> None:
         )
 
 
-def test_group_constructor_rejects_duplicate_raw_timestamps() -> None:
+def test_group_constructor_rejects_decreasing_raw_timestamps() -> None:
     group = make_group("action/left_arm/joint_angle")
     time = group.time.copy()
-    time[2, 0] = time[1, 0]
+    time[2, 0] = time[1, 0] - 1.0
 
-    with pytest.raises(ValueError, match="strictly increasing timestamps"):
+    with pytest.raises(ValueError, match="monotonically non-decreasing timestamps"):
         CommandedJointGroup(
             group.field_name,
             group.joint_order,
@@ -222,6 +222,20 @@ def test_group_constructor_rejects_duplicate_raw_timestamps() -> None:
             time,
             group.aligned_index,
         )
+
+
+def test_group_constructor_allows_duplicate_raw_timestamps() -> None:
+    group = make_group("action/left_arm/joint_angle")
+    time = group.time.copy()
+    time[2, 0] = time[1, 0]
+
+    CommandedJointGroup(
+        group.field_name,
+        group.joint_order,
+        group.joint_angles,
+        time,
+        group.aligned_index,
+    )
 
 
 def test_group_constructor_requires_unique_nonempty_joint_order() -> None:

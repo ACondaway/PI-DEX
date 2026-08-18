@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "contract_id": "sharpa_north_joint_29d_observation_v0",
+  "review_status": "reviewed",
+  "reviewed_by": "congsheng",
+  "review_notes": "Reviewed 2026-08-15 via coding-agent handoff: data owner confirmed candidate fields (K=8, raw_control_60_hz @ 59.4 Hz, state columns 65D, head/stereo/lefteye→base_0_rgb with righteye unused, wrist fisheyes, anno.json task_instruction prompts, episode_hash_stratified_by_task splits). Fourth head view remains unused by explicit policy. Closed-loop joint_29d training may use this file. Cartesian and multi-node are out of scope for this contract.",
+  "action_representation": "joint_29d",
+  "physical_horizon": 8,
+  "timebase": "raw_control_60_hz",
+  "control_frequency_hz": 59.4,
+  "episode_tail_policy": "reject_incomplete_horizon",
+  "state_columns": [
+    {
+      "source_path": "state/left_arm/joint_angle",
+      "slice_start": 0,
+      "slice_stop": 7,
+      "unit": "rad",
+      "semantics": "absolute_measured"
+    },
+    {
+      "source_path": "state/left_hand/joint_angle",
+      "slice_start": 0,
+      "slice_stop": 22,
+      "unit": "rad",
+      "semantics": "absolute_measured"
+    },
+    {
+      "source_path": "state/right_arm/joint_angle",
+      "slice_start": 0,
+      "slice_stop": 7,
+      "unit": "rad",
+      "semantics": "absolute_measured"
+    },
+    {
+      "source_path": "state/right_hand/joint_angle",
+      "slice_start": 0,
+      "slice_stop": 22,
+      "unit": "rad",
+      "semantics": "absolute_measured"
+    },
+    {
+      "source_path": "state/motor/joint_angle",
+      "slice_start": 0,
+      "slice_stop": 7,
+      "unit": "rad",
+      "semantics": "absolute_measured"
+    }
+  ],
+  "image_slots": [
+    {
+      "openpi_key": "base_0_rgb",
+      "sharpa_group": "observe/vision/head/stereo/lefteye",
+      "mask_when_present": true,
+      "resize_hw": null,
+      "crop_roi_xyxy": null
+    },
+    {
+      "openpi_key": "left_wrist_0_rgb",
+      "sharpa_group": "observe/vision/left_wrist/fisheye",
+      "mask_when_present": true,
+      "resize_hw": null,
+      "crop_roi_xyxy": null
+    },
+    {
+      "openpi_key": "right_wrist_0_rgb",
+      "sharpa_group": "observe/vision/right_wrist/fisheye",
+      "mask_when_present": true,
+      "resize_hw": null,
+      "crop_roi_xyxy": null
+    }
+  ],
+  "image_channel_order": "rgb",
+  "image_layout": "hwc",
+  "image_dtype_range": "uint8_0_255",
+  "unused_sharpa_vision_groups": [
+    "observe/vision/head/stereo/righteye"
+  ],
+  "prompt_policy": {
+    "source": "anno.json:tags.task_instruction",
+    "missing_policy": "reject",
+    "normalize_whitespace": true,
+    "annotation_interval_closed": true
+  },
+  "split_policy": {
+    "strategy": "episode_hash_stratified_by_task",
+    "train_fraction": 0.8,
+    "validation_fraction": 0.1,
+    "test_fraction": 0.1,
+    "seed": 0,
+    "dedupe_by_episode_id": true
+  },
+  "num_workers": 0,
+  "bad_sample_report_path": "outputs/bad_samples/joint_29d_v0.jsonl"
+}

@@ -196,7 +196,13 @@ loader = create_pytorch_data_loader_from_dataset(
 )
 ```
 
-当前 loader 明确只支持单进程训练；若 `torch.distributed` 已初始化会立即报 `NotImplementedError`，避免上游无限 loader 与 `DistributedSampler` 组合后静默重复 epoch 或空转。`data/repack` output transforms 必须为空；model output 在首次配置前也必须为空，重复配置时则只允许已存在唯一的 `UnpackBimanualActions`。这样 PI-DEX 会在 inverse normalization 前把 `actions` 解成两侧字段，且不会和其他 model output transform 重排语义。
+当前 loader 支持单进程训练，以及在 ``torch.distributed`` 已初始化时使用
+``DistributedSampler``（``shuffle`` 必须为 ``False``）。``--batch-size`` 始终是
+**per-rank local batch**。火山引擎多机请用 ``pi-dex-volc-train`` /
+``scripts/volc_ddp_train.sh``。``data/repack`` output transforms 必须为空；model output
+在首次配置前也必须为空，重复配置时则只允许已存在唯一的 ``UnpackBimanualActions``。这样
+PI-DEX 会在 inverse normalization 前把 ``actions`` 解成两侧字段，且不会和其他 model
+output transform 重排语义。
 
 变换顺序固定为：
 
@@ -339,10 +345,11 @@ padding noise 策略，因此与 31D/29D 训练契约不兼容。First-party run
 `PiDexPytorchTrainer`（或经过同等审阅和测试的语义等价实现）。
 
 当前 vendored PyTorch 路径只支持 full bfloat16 或 full float32 训练，不支持 LoRA、FSDP、
-EMA 或 mixed precision/AMP；PI-DEX loader 还明确不支持 DDP。上游对 full fine-tuning 的粗略
-估算是单卡显存超过 70 GB（A100 80GB/H100 级别），但正式资源门槛必须用 PI-DEX 的实际
-`2*K`、图像/state/prompt、batch、optimizer 和 compile 设置做完整 step probe 后决定。普通
-DDP 复制模型，不能替代 FSDP 降低单卡显存。
+EMA 或 mixed precision/AMP。PI-DEX 已支持 torchrun / 火山 MLP 多机 DDP（local batch ×
+world_size = global batch；rank-0 写 checkpoint）。上游对 full fine-tuning 的粗略估算是
+单卡显存超过 70 GB（A100 80GB/H100 级别），但正式资源门槛必须用 PI-DEX 的实际 `2*K`、
+图像/state/prompt、batch、optimizer 和 compile 设置做完整 step probe 后决定。普通 DDP
+复制模型，不能替代 FSDP 降低单卡显存。
 
 `TrainConfig.pytorch_training_precision` 与 `train_config.model.dtype` 是两个独立字段；
 first-party config builder/runner 必须在模型构造前要求二者逐字相等，并验证实际参数 dtype
@@ -442,6 +449,81 @@ resolver，使运行时直接读取 snapshot 中已验 SHA-256 的文件且不�
 资产纳入 sidecar 前，不能把 checkpoint 描述为完全自包含。
 
 ## 6. 策略服务
+
+### 6.1 PI-DEX model server（推荐）
+
+机器人侧保留 Zenoh/SDK；GPU 机只跑推理服务。首个入口：
+
+```bash
+# conda activate pi-dex 后
+pi-dex-serve \
+  --checkpoint-dir /path/to/run/10000 \
+  --observation-contract configs/site/joint_29d_observation.reviewed.json \
+  --assets-dir /path/to/assets-Insert_Battery \
+  --asset-id sharpa_joint_29d_insert_battery \
+  --robot-id POC22005 \
+  --host 127.0.0.1 \
+  --port 8000
+
+# 或
+bash scripts/serve_joint29d.sh --checkpoint-dir /path/to/run/10000
+```
+
+协议：与 OpenPI 相同的 WebSocket + msgpack-numpy。连接后先收 metadata，再循环
+`observation → action`。Observation 必须含 OpenPI 字段，并附加：
+
+```text
+observation_timestamp_ns
+clock_domain
+```
+
+相对 stock OpenPI server 的默认加固：默认只绑 `127.0.0.1`、有
+`--max-message-bytes`、失败时不回传 traceback、可选 `--api-key` /
+`--infer-timeout-s`。跨网或上真机前仍须按 `server-validation.md` 阶段 E 补 TLS/
+认证评审与独立 controller watchdog（机侧）。
+
+环回探针（server 已启动时）：
+
+```bash
+pi-dex-serve-probe --host 127.0.0.1 --port 8000 --api-key "$API_KEY"
+```
+
+### 6.1.1 从端推理桥（Zenoh ↔ serve）
+
+机器人侧已有 Sharpa 启动脚本（NUC `start.sh` / `start-nuc.sh` + Orin
+`start-remote-orin.sh`），pendant **F6** 切遥操作↔推理、**F2** 走
+init→standby↔moving。PI-DEX **不替代**这些进程；缺的是推理模式下向
+`inference/action` 发布 `UhrActionBundle` 的策略桥。
+
+推荐拓扑：
+
+| 机器 | 进程 |
+|------|------|
+| 从端 NUC (+ Orin) | `bash start.sh`（或拆开的 nuc/orin 脚本） |
+| GPU 机 | `pi-dex-serve` / `scripts/serve_joint29d.sh` |
+| 从端 NUC（同 Zenoh 域） | `pi-dex-robot-client` / `scripts/robot_client_joint29d.sh` |
+
+```bash
+# 离线确认 protobuf→SDK→OpenPI 观测（无需 Zenoh / GPU）
+pi-dex-robot-client --mode codec-smoke
+
+# 真机：先拉起机器人栈与 model server，再起桥
+bash scripts/robot_client_joint29d.sh \
+  --serve-host <GPU_IP> \
+  --serve-port 8000 \
+  --prompt "insert the battery"
+
+# pendant: F6 → 推理模式，F2 → moving
+```
+
+默认 topic 与参考 SDK（`examples/sharpa_north_sdk.py`）一致：
+`north_observation` → `inference/action`。编解码见 `pi_dex.north_codec`
+（schema：`examples/north.proto`，生成码：`pi_dex.north_pb2`）。NUC 需安装
+`eclipse-zenoh`；lease / e-stop / watchdog 仍属后续 `BimanualController`。
+
+推理机 / 从端环境安装与联调步骤见专文 [inference-env.md](inference-env.md)。
+
+### 6.2 Stock OpenPI server（仅环回诊断）
 
 服务端 adapter 只接受 OpenPI 已经完成 inverse normalization 的
 `left_actions/right_actions[K,D]`，其中 `D` 必须与 checkpoint/spec 的 31D Cartesian 或

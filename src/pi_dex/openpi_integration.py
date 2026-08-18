@@ -140,7 +140,7 @@ def create_pi05_model_config(
     dtype: str = "bfloat16",
     paligemma_variant: str = "gemma_2b",
     action_expert_variant: str = "gemma_300m",
-    max_token_len: int = 200,
+    max_token_len: int = 448,
     pytorch_compile_mode: str | None = "max-autotune",
 ) -> Any:
     """Create an OpenPI pi05 config with the exact PI-DEX action shape.
@@ -153,7 +153,9 @@ def create_pi05_model_config(
         dtype: PyTorch model precision, either ``"bfloat16"`` or ``"float32"``.
         paligemma_variant: One supported vendored OpenPI Gemma backbone name.
         action_expert_variant: One supported vendored OpenPI Gemma expert name.
-        max_token_len: Positive prompt token limit passed to OpenPI.
+        max_token_len: Positive prompt (+ discrete-state) token limit. Default
+            ``448`` covers full SharpaOpenData pi0.5 tokenized lengths with 65D
+            state (scan max 425; see dataset token-length report).
         pytorch_compile_mode: ``None`` or one of PyTorch's four modes supported by
             the vendored ``Pi0Config``.
 
@@ -589,6 +591,7 @@ def create_pytorch_data_loader_from_dataset(
     seed: int,
     num_batches: int | None = None,
     skip_norm_stats: bool = False,
+    distributed: bool | None = None,
 ) -> Any:
     """Build OpenPI's PyTorch loader around a PI-DEX K-step dataset.
 
@@ -604,13 +607,19 @@ def create_pytorch_data_loader_from_dataset(
         assets_dirs: OpenPI configuration-assets root forwarded to the factory.
         model_config: Matching OpenPI pi05 model config.
         spec: PI-DEX action contract.
-        batch_size: Positive local batch size passed to the OpenPI loader.
-        shuffle: Whether to shuffle samples.
+        batch_size: Positive **local** batch size passed to the OpenPI loader.
+        shuffle: Whether to shuffle samples. Must be ``False`` under DDP so the
+            deterministic sample cursor and ``DistributedSampler`` stay aligned.
         num_workers: Non-negative number of spawned data-loader workers.
-        seed: Integer PyTorch data-loader shuffle seed.
+        seed: Integer PyTorch data-loader shuffle seed (also seeds the
+            distributed sampler epoch).
         num_batches: Optional positive number of batches before iteration stops.
         skip_norm_stats: Skip normalization only for explicit diagnostic/statistics
             workflows.
+        distributed: When ``True``, require an initialized process group and attach
+            a ``DistributedSampler``. When ``None`` (default), enable automatically
+            if ``torch.distributed`` is already initialized. When ``False``, refuse
+            an already-initialized process group.
 
     Returns:
         OpenPI ``DataLoaderImpl`` yielding CPU PyTorch observations and actions
@@ -620,10 +629,10 @@ def create_pytorch_data_loader_from_dataset(
     Raises:
         ImportError: If PyTorch or the vendored OpenPI loader is unavailable.
         TypeError: If control arguments have ambiguous or invalid types.
-        ValueError: If batch/worker limits, normalization mode, stats, or model
-            config are invalid.
-        NotImplementedError: If ``torch.distributed`` is already initialized or
-            OpenPI detects more than one JAX process.
+        ValueError: If batch/worker limits, normalization mode, stats, shuffle
+            under DDP, or model config are invalid.
+        RuntimeError: If ``distributed=True`` but the process group is not ready.
+        NotImplementedError: If OpenPI detects more than one JAX process.
 
     Notes:
         This uses a small set of OpenPI internal loader classes because the stock
@@ -649,6 +658,8 @@ def create_pytorch_data_loader_from_dataset(
         raise TypeError(f"shuffle: expected bool, got {type(shuffle).__name__}")
     if not isinstance(skip_norm_stats, bool):
         raise TypeError(f"skip_norm_stats: expected bool, got {type(skip_norm_stats).__name__}")
+    if distributed is not None and not isinstance(distributed, bool):
+        raise TypeError(f"distributed: expected bool or None, got {type(distributed).__name__}")
     if isinstance(seed, bool) or not isinstance(seed, int):
         raise TypeError(f"seed: expected int, got {type(seed).__name__}")
     if isinstance(num_batches, bool) or (num_batches is not None and not isinstance(num_batches, int)):
@@ -666,9 +677,21 @@ def create_pytorch_data_loader_from_dataset(
 
     import torch
 
-    if torch.distributed.is_available() and torch.distributed.is_initialized():
-        raise NotImplementedError(
-            "initialized torch.distributed/DDP is not supported by the PI-DEX custom dataset loader"
+    dist_available = torch.distributed.is_available()
+    dist_initialized = dist_available and torch.distributed.is_initialized()
+    use_distributed = dist_initialized if distributed is None else distributed
+    if use_distributed and not dist_initialized:
+        raise RuntimeError(
+            "distributed=True requires an initialized torch.distributed process group"
+        )
+    if distributed is False and dist_initialized:
+        raise ValueError(
+            "distributed=False conflicts with an initialized torch.distributed process group"
+        )
+    if use_distributed and shuffle:
+        raise ValueError(
+            "shuffle must be False under DDP so DistributedSampler and the "
+            "PI-DEX sample cursor remain deterministic"
         )
 
     configured_data = data_factory.create(validated_assets_dirs, model_config)
@@ -695,11 +718,22 @@ def create_pytorch_data_loader_from_dataset(
         skip_norm_stats=skip_norm_stats,
     )
 
+    sampler = None
+    if use_distributed:
+        sampler = torch.utils.data.distributed.DistributedSampler(
+            transformed_dataset,
+            num_replicas=torch.distributed.get_world_size(),
+            rank=torch.distributed.get_rank(),
+            shuffle=False,
+            seed=seed,
+            drop_last=True,
+        )
+
     loader = openpi_data_loader.TorchDataLoader(
         transformed_dataset,
         local_batch_size=batch_size,
-        shuffle=shuffle,
-        sampler=None,
+        shuffle=shuffle and sampler is None,
+        sampler=sampler,
         num_batches=num_batches,
         num_workers=num_workers,
         seed=seed,

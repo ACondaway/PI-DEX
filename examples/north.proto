@@ -1,0 +1,467 @@
+syntax = "proto3";
+// version 1.0324 alpha
+
+package proto;
+
+// ==================== Common Messages ====================
+message Stamp {
+    int32 sec = 1;
+    int32 nanosec = 2;
+}
+message Header {
+    Stamp stamp = 1;
+    string key = 2;
+    string frame_id = 3;
+    Stamp sys_time = 4;
+    uint32 seq = 5;
+}
+message Point {
+    float x = 1;
+    float y = 2;
+    float z = 3;
+}
+message Quaternion {
+    float w = 1;
+    float x = 2;
+    float y = 3;
+    float z = 4;
+}
+message Vector3 {
+    float x = 1;
+    float y = 2;
+    float z = 3;
+}
+message Vector2 {
+    float x = 1;
+    float y = 2;
+}
+message Pose {
+    Point position = 1;
+    Quaternion orientation = 2;
+}
+message Wrench {
+    Vector3 force = 1;
+    Vector3 torque = 2;
+}
+message PoseStamped {
+    Header header = 1;
+    Pose pose = 2;
+}
+message Transform {
+    string frame = 1;  // T_cam_arm = arm in cam 
+    Pose pose = 2;
+}
+message WrenchStamped {
+    Header header = 1;
+    Wrench wrench = 2;
+}
+
+// IMU数据消息（包含姿态、角速度、线性加速度）
+message Imu {
+    Header header = 1;
+    Quaternion orientation = 2;           // 原始姿态四元数
+    Vector3 angular_velocity = 3;         // 角速度 (gyro)
+    Vector3 linear_acceleration = 4;      // 线性加速度 (acc)
+    Quaternion aligned_orientation = 5;   // 重力对齐后的姿态四元数
+}
+
+// ================= Observation Messages ================
+message CompressedImage {
+    Header header = 1;
+    string format = 2; // e.g., "jpeg"
+    bytes data = 3;    // Compressed image data
+}
+message Image {
+    Header header = 1;
+    int32 height = 2;
+    int32 width = 3;
+    string encoding = 4; // e.g., "rgb8"
+    bytes data = 5;      // Image data
+}
+message Deform {
+    int32 height = 1;
+    int32 width = 2;
+    bytes data = 3;
+}
+message VRImage {
+    Header header = 1;
+    CompressedImage image_right = 2;
+    CompressedImage image_left = 3;
+    CompressedImage fish_right = 4;
+    CompressedImage fish_left = 5;
+}
+
+// ================= State/Action Messages ==================
+message MocapKeypoints{
+    Header header = 1;
+    repeated Pose left_mocap_pose = 2;
+    repeated Pose right_mocap_pose = 3;
+}
+
+message Joint {
+    repeated string name = 1;
+    repeated float position = 2;
+    repeated float velocity = 3;
+    repeated float effort = 4;
+}
+message Arm {
+    Header header = 1;
+    Pose cartesian = 2;
+    Joint joint = 3;
+    Wrench wrench = 4;
+    uint32 error_code = 5;
+}
+message Hand {
+    Header header = 1;
+    Joint joint = 2;
+}
+message Neck {
+    Header header = 1;
+    Joint joint = 2;
+}
+message Chassis {
+    Header header = 1;
+    Vector2 vel = 2; // x: linear, y: angular
+}
+message Tactile {
+    Header header = 1;
+    Deform deform = 2;
+    Wrench force6d = 3;
+    CompressedImage raw_image = 4;  // 触觉原图数据
+    CompressedImage deform_image = 5;  // 触觉变形图像数据
+}
+
+// ================ State/Action Bundle ==================
+message HandActionBundle {
+    Hand left_glove = 1;
+    Hand right_glove = 2;
+}
+message HandStateBundle {
+    Hand left_hand = 1;
+    Hand right_hand = 2;
+    repeated Tactile tactile = 3;
+}
+message ArmStateBundle {
+    Arm left_arm = 1;
+    Arm right_arm = 2;
+}
+message ArmActionBundle {
+    Arm left_arm = 1;
+    Arm right_arm = 2;
+} 
+message UhrActionBundle {
+    Hand left_glove = 1;
+    Hand right_glove = 2;
+    Arm left_arm = 3;
+    Arm right_arm = 4;
+    Neck neck = 5;
+    MotorsCommand motor = 6;
+    Chassis chassis = 7;
+    string language = 8;
+}
+message UhrStateBundle {
+    Hand left_hand = 1;
+    Hand right_hand = 2;
+    repeated Tactile tactile = 3;
+    Arm left_arm = 4;
+    Arm right_arm = 5;
+    Neck neck = 6;
+    MotorsStatus motor = 7;
+    Chassis chassis = 8;
+    repeated Transform transforms = 9;
+}
+
+
+// ================= Running Mode Messages =================
+message GloveCalibration {
+    repeated Hand gestures = 1;
+}
+message Mode {
+    Header header = 1;
+    int32 operation_mode = 2; //
+    int32 state = 3;  // INIT, STANDBY, RUNNING
+    int32 sub_state = 4; // Enter, Leaving
+}
+message LbtoInfo {
+    Header header = 1;
+    Mode mode = 2;
+    int32 record_num = 3;
+    int32 monitor_status = 4; // Error, Normal
+    ArmInfo arm_info_right = 5;
+    ArmInfo arm_info_left = 6;
+    HandInfo hand_info_right = 7;
+    HandInfo hand_info_left = 8;
+}
+message ArmInfo {
+    Header header = 1;
+    int32 arm_state = 2;
+    repeated float arm_force = 3;
+}
+message HandInfo {
+    Header header = 1;
+    int32 hand_state = 2;
+    int32 hand_error = 3;
+    repeated float hand_force = 4;
+}
+// ================ Interactive Messages ====================
+message Endpoint {
+    string IP = 1;
+    uint32 port = 2;
+}
+message Info {
+    Header header = 1;
+    string message = 2;
+}
+
+message Request {
+    string key = 1;
+    uint32 cmd = 2;
+    uint32 device_id = 3;
+    string message = 4;
+}
+message Response {
+    bool success = 1;
+    int32 data = 2;
+    string message = 3;
+}
+message SocketInfo {
+    Endpoint left_hand = 1;
+    Endpoint right_hand = 2;
+    Endpoint left_arm = 3;
+    Endpoint right_arm = 4;
+    repeated Endpoint left_tactile = 5;
+    repeated Endpoint right_tactile = 6;
+}
+
+// ================ North Observation Messages ====================
+message NorthObservation {
+    Header header = 1;
+    
+    // Basic observation info
+    double reward = 2;
+    double timestamp = 3;
+    bool on_sleep = 4;
+    
+    // Robot state data (from UhrStateBundle)
+    UhrStateBundle robot_state = 5;
+    
+    // Vision data (from VRImage)
+    VRImage vision = 6;
+    
+    // Mode information
+    Mode mode = 7;
+
+    //language information
+    string language = 8;
+} 
+
+// XR控制器状态数据（用于 Quest / OpenXR 控制器的实时按键、轴值与状态）
+message GamepadState {
+    // 扣动板机按钮（Index Trigger）是否按下
+    bool trigger_button = 2;
+
+    // 握把按钮（Grip Button）是否按下（通常是中指位置）
+    bool grip_button = 3;
+
+    // 主按钮是否按下（Oculus 左手为 X，右手为 A）
+    bool primary_button = 4;
+
+    // 次按钮是否按下（Oculus 左手为 Y，右手为 B）
+    bool secondary_button = 5;
+
+    // 主按钮是否被触摸（未必按下，轻触时也可能为 true）
+    bool primary_touch = 6;
+
+    // 次按钮是否被触摸
+    bool secondary_touch = 7;
+
+    // 摇杆按钮是否被按下（摇杆被按下作为按钮）
+    bool thumbstick_click = 8;
+
+    // 是否触摸到了拇指支撑区域（某些设备上有独立电容区域）
+    bool thumbrest = 9;
+
+    // === 轴值（Trigger、Grip）===
+
+    // 扣动板机的模拟值（范围 0.0 - 1.0）
+    float trigger = 10;
+
+    // 握把的模拟值（范围 0.0 - 1.0）
+    float grip = 11;
+
+    // 控制器摇杆的二维方向值（左/右、上/下，范围大致为 -1.0 ~ 1.0）
+    Vector2 thumbstick = 12;
+
+    Pose pose = 14;
+
+    // 控制器当前是否处于有效连接/追踪状态
+    bool is_valid = 13;
+    // 手柄是否被追踪
+    bool is_tracked = 15;
+}
+
+message HMDInfo {
+    Header header = 1;
+    // 脖子
+    Vector2 neck_pos = 7;
+    // 手柄 
+    GamepadState gamepad_left_state = 2;
+    GamepadState gamepad_right_state = 3;
+    // OpenXR获取手26个关节
+    repeated Pose left_hand_joint_pose = 4;
+    repeated Pose right_hand_joint_pose = 5;
+    // MetaSDK获取全身84个关节(含手) 
+    repeated Pose full_body_joint_pose = 6;
+    Pose head_pos = 8;
+}
+
+// ================ Motor Control Messages ====================
+// 电机控制命令
+message MotorCommand {
+  uint32 motor_id = 1;
+  string command = 2;  // "enable", "disable", "start", "stop", "position", "velocity", "current", "emergency_stop", "set_control_mode", "close_watchdog"
+  double value = 3;    // 位置(度)、速度(RPM)、电流(mA)、控制模式值
+  string unit = 4;     // "deg", "rpm", "ma", "mode"
+}
+
+// 电机状态
+message MotorStatus {
+  uint32 id = 1;
+  string name = 2;
+  double position = 3;      // 当前位置 (度)
+  double velocity = 4;      // 当前速度 (RPM)
+  double current = 5;       // 当前电流 (mA)
+  double temperature = 6;   // 当前温度 (°C)
+  double torque = 7;        // 当前力矩 (Nm)
+  uint32 faults = 8;        // 故障状态
+  uint32 state = 9;         // 运动状态
+  bool is_enabled = 10;     // 是否使能
+  bool is_error = 11;       // 是否有错误
+  int64 timestamp = 12;     // 时间戳 (毫秒)
+}
+
+// 电机状态消息（包含所有电机状态）
+message MotorsStatus {
+  repeated MotorStatus motors = 1;
+  int64 timestamp = 2;
+  uint32 total_count = 3;
+  string system_status = 4;  // "healthy", "warning", "error"
+}
+
+// 电机控制消息（包含所有电机控制命令）
+message MotorsCommand {
+  repeated MotorCommand commands = 1;
+  int64 timestamp = 2;
+  string command_type = 3;  // "batch", "individual", "emergency"
+}
+
+// 系统健康状态
+message SystemHealth {
+  string status = 1;
+  uint32 motor_count = 2;
+  int64 timestamp = 3;
+}
+
+// 程序状态
+message DemoStatus {
+  string status = 1;  // "started", "running", "stopping", "stopped"
+  int64 timestamp = 2;
+}
+
+// 手柄震动
+message HapticRequest {
+   int32 hand = 1;           //左右手配置：0-left-hand, 1-right-hand
+   float amplitude = 2;      //震动幅度：0..1
+   float duration = 3;      //震动持续时间：seconds
+}
+
+message NorthTeleopStatus {
+    Header header = 1;
+    string state = 2;                       // "init", "idle", "recv_req", "running"
+    string hand_pose_mocap_mode = 3;        // "Manus" or "SharpaGlove"
+    string hand_wrist_pose_mocap_mode = 4;  // "SharpaExoskeleton" or "SharpaExoskeletonDirect" or "VRGamepad" or "VRHand"
+    string head_pose_mocap_mode = 5;        // "VRHeadset"
+    string upper_trunk_pose_mocap_mode = 6; // "IMU"
+}
+
+// Retargeting结果
+message NorthTeleopInfo {
+    Header header = 1;
+    bool upper_trunk_is_stable = 2; // 上半身是否静止
+    bool is_direct = 3; // 是否为透传模式
+    Joint right_hand_joints = 4;
+    Joint left_hand_joints = 5;
+    Pose T_RobotRoot_RobotHead = 6;
+    Pose T_RobotRoot_RobotUpperTrunk = 7;
+    Joint right_arm_joints = 8;
+    Joint left_arm_joints = 9;
+    Pose T_RobotRoot_RightRobotHand = 10;
+    Pose T_RobotRoot_LeftRobotHand = 11;
+    Vector3 imu_angular_velocity = 12;
+    Vector3 imu_linear_acceleration = 13;
+}   
+
+// =============== Powerboard Monitor Messages ===================
+
+// 急停状态消息
+message EStopStatus {
+    uint32 state = 1;        // 急停状态：0=IDLE, 1=ACTIVE, 2=RELEASED
+    uint32 count = 2;        // 急停计数器
+    uint64 timestamp = 3;    // 时间戳 (毫秒)
+}
+
+// MOS状态
+message MosStatus {
+    uint32 mos_id = 1;          // MOS ID (0~5)
+    float voltage = 2;          // 电压 (V)
+    float current = 3;          // 电流 (A)
+    int32 temperature = 4;      // 温度 (°C)
+    uint32 estop_state = 5;     // 急停状态：0=不在急停，1=急停中
+    uint32 error_code = 6;      // 错误码
+    int64 timestamp = 7;        // 时间戳 (毫秒)
+}
+
+// 风扇状态
+message FanStatus {
+    uint32 fan_id = 1;          // 风扇ID (0~2)
+    uint32 speed_percent = 2;   // 转速百分比 (0~100%)
+    uint32 error_code = 3;      // 错误码
+    int64 timestamp = 4;        // 时间戳 (毫秒)
+}
+
+// 电池状态
+message BatteryStatus {
+    float voltage = 1;       // 电池电压 (V)
+    float current = 2;       // 电池电流 (A)
+    float capacity = 3;      // 电池容量百分比 (%)
+    int32 temperature = 4;   // 电池温度 (°C)
+    string battery_type = 5; // 电池类型："48V" 或 "24V"
+    uint32 error_code = 6;   // 错误码
+    int64 timestamp = 7;     // 时间戳 (毫秒)
+}
+
+// 电源PG状态
+message PowerPgStatus {
+    uint32 total_pg_status = 1;   // 总电源状态
+    uint32 charge_pg_status = 2;  // 充电电源状态
+    repeated uint32 pg_pins = 3;  // PG1~PG6 状态数组
+    int64 timestamp = 4;          // 时间戳 (毫秒)
+}
+
+// 电池告警消息
+message BatteryAlert {
+    uint32 alert_level = 1;     // 告警级别：20 或 5 (表示剩余百分比)
+    string message = 2;         // 告警信息
+    int64 timestamp = 3;        // 时间戳 (毫秒)
+}
+
+// 电源板汇总状态消息
+message PowerboardStatus {
+    int64 timestamp = 1;            
+    EStopStatus estop = 2;
+    repeated MosStatus mos_status = 3;
+    repeated FanStatus fan_status = 4;
+    BatteryStatus battery = 5;
+    PowerPgStatus power_pg = 6;
+    repeated BatteryAlert active_alerts = 7;
+}

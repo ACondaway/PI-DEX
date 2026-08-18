@@ -11,25 +11,23 @@
 - 单元测试通过只能证明被测试的软件边界，不能证明目标 GPU、驱动、checkpoint、网络或机器人安全。
 - GPU smoke test 通过不能证明完整模型能在目标显存内加载或稳定推理。
 - policy 能产生动作不能证明动作的单位、坐标系、关节顺序、限位或硬件执行正确。
-- 当前 PI-DEX 自定义数据 loader 在 `torch.distributed` 已初始化时应立即拒绝运行；在另有实现和测试前，不得宣称支持 DDP 或多机训练。
-- 仓库提供 `pi-dex-train-pytorch` launcher seam，但没有 first-party Sharpa HDF5
-  dataset 或完整 training runner。launcher 校验动作表示/FK 依赖，要求成功 runner 绑定
-  匹配的 spec、要求 Cartesian 通过 context 获取 FK，并委托外部 `module:callable`；它不是
-  端到端训练实现。完整 checkpoint manager、站点 WebSocket
-  launcher、Sharpa SDK controller 和硬件急停也仍未实现。服务器和硬件测试必须使用
-  经评审、纳入版本控制的接入程序，不能用临时脚本补齐后宣称能力已完成。
+- 多机 DDP 已实现（torchrun / 火山 MLP）；正式放行仍须按阶段 D 留证。FSDP / LoRA / AMP
+  仍不在范围内。
+- 仓库提供 `pi-dex-train-pytorch` launcher 与 first-party `pi_dex.training_runner` /
+  Sharpa `joint_29d` dataset；完整站点 WebSocket launcher、Sharpa SDK controller 租约和
+  硬件急停仍未闭合。服务器和硬件测试必须使用经评审、纳入版本控制的接入程序。
 - 当前没有受控的 `pi05_base` JAX/Orbax→PyTorch converter wrapper/parity harness；原始上游
   converter 仅退出码为零或生成 `model.safetensors` 不能作为初始化权重通过证据。
 - 当前 PyTorch 路径只支持 full bfloat16/full float32，不支持 LoRA、FSDP、EMA 或
-  mixed precision/AMP；PI-DEX loader 还会拒绝 DDP。资源不足不能通过静默切换这些未支持路径
-  规避。
+  mixed precision/AMP；DDP 可用但不能用来规避单卡显存不足。资源不足不能通过静默切换
+  未支持路径规避。
 - 任一阶段为 `FAIL` 或 `BLOCKED` 时不得继续到依赖它的阶段。硬件阶段还必须满足现场负责人的独立放行条件。
 
 阶段依赖固定为：`A → A.1 → A.2`；基础 GPU 阶段 B 可在 A 后并行执行；B.1 还依赖 A.1、
 A.2 以及已审阅的 dataset/runner；B.2 依赖 B.1；C 依赖 B.2；E 依赖 C 和 D；F 依赖 E；G
-依赖 F。A.3 是不加载数据/CUDA 的 launcher contract 验证，可在 A 后执行；D 是独立的
-fail-closed 分布式边界，但在 E 前必须完成。每阶段只要求其输入制品，不能提前要求后续阶段
-尚未产出的 checkpoint。
+依赖 F。A.3 是不加载数据/CUDA 的 launcher contract 验证，可在 A 后执行；D 是分布式 DDP
+留证阶段，在 E 前必须完成。每阶段只要求其输入制品，不能提前要求后续阶段尚未产出的
+checkpoint。
 
 ## 2. 前置条件
 
@@ -348,8 +346,8 @@ PY
 ### 阶段 B.1：完整微调资源门控
 
 上游给出的 PyTorch full fine-tuning 粗略估算为 `>70 GB` GPU 显存；它不是 PI-DEX 的实测
-阈值。当前 PyTorch 路径不能用 mixed precision、FSDP、LoRA 或 EMA 降低资源需求，当前
-PI-DEX loader 也不支持 DDP。普通 DDP 会复制模型，不能代替 FSDP 降低单卡显存。
+阈值。当前 PyTorch 路径不能用 mixed precision、FSDP、LoRA 或 EMA 降低资源需求。已支持的
+DDP 会复制模型，不能代替 FSDP 降低单卡显存；多卡主要用于增大 global batch / 缩短墙钟时间。
 
 资源 probe 必须使用与正式实验相同的 model config、converted weights、optimizer、compile
 mode、最大 image/state/prompt shape、`2*K` horizon 和计划 batch size，至少完成一次完整
@@ -455,28 +453,33 @@ sidecar；不得通过 shape 猜测、截断或补 stats 来兼容。通过标�
 预期通过或拒绝，推理输出、延迟和显存满足预登记阈值，且无权重、normalization 或
 tokenizer 来源漂移。只完成模型加载但没有真实推理不得记为通过。
 
-### 阶段 D：分布式边界
+### 阶段 D：分布式 DDP
 
-当前验收目标是证明不受支持的分布式 loader 会安全拒绝，而不是证明 DDP 可用。使用经审阅的 harness 初始化 `torch.distributed` 后调用 PI-DEX 自定义 loader：
+验收目标是证明多进程 DDP 路径可用且边界清晰。最小探针：
 
 ```bash
-export PI_DEX_DISTRIBUTED_PROBE=/srv/pi-dex-site/distributed_probe.py
-test -f "$PI_DEX_DISTRIBUTED_PROBE"
-cd "$PI_DEX_REPO/openpi"
-uv run --locked --with-editable .. torchrun \
-  --standalone \
-  --nproc-per-node=2 \
-  "$PI_DEX_DISTRIBUTED_PROBE"
+# 单机双进程（CPU gloo 也可用于 loader/cursor 探针）
+torchrun --standalone --nproc-per-node=2 \
+  -m pi_dex.training_runner  # 或站点 distributed_probe / 短 max-steps train
+```
+
+火山引擎 MLP 入口（平台注入 ``MLP_*``）：
+
+```bash
+bash scripts/volc_ddp_train.sh -- \
+  --action-representation joint_29d \
+  --runner pi_dex.training_runner:run -- \
+  --mode train ...
+# 或: pi-dex-volc-train -- --action-representation joint_29d ...
 ```
 
 通过标准：
 
-- 每个 rank 都在读取训练样本、执行 forward/backward 或写 checkpoint 之前观察到预期的 `NotImplementedError`。
-- 进程组被正常回收，没有残留 worker、hang、重复样本消费或部分 checkpoint。
-- harness 将“预期拒绝”转换为自身退出码零；未捕获异常导致的任意非零退出不能自动记为通过。
-- 报告结论必须写成“分布式路径按设计 fail closed”，不得写成“DDP/multi-GPU supported”。
-
-未来若实现 DDP，必须另行增加样本分片、global batch、loss/gradient parity、all-reduce、rank-0 原子 checkpoint、恢复一致性和故障注入测试；本文当前标准不能用于放行该能力。
+- ``DistributedSampler(shuffle=False, drop_last=True)`` + local ``batch_size``；``sampler_state`` 记录 ``world_size`` / ``global_batch_size``。
+- 仅 rank-0 写入原子 checkpoint；其它 rank barrier 后退出且无部分文件。
+- resume 时 ``world_size`` / ``batch_size`` / ``order_sha256`` 必须一致。
+- ``distributed=False`` 与已初始化 process group 冲突时报错；DDP 下 ``shuffle=True`` 被拒绝。
+- 报告可写 “DDP supported under documented constraints”，不得宣称 FSDP / AMP / LoRA。
 
 ### 阶段 E：WebSocket 环回与受控网络
 
@@ -673,4 +676,6 @@ GPU ECC / Xid / OOM：
 - [项目概览](../README.md)
 - [服务器 Coding Agent 接管说明](server-handoff.md)
 - [PyTorch 训练与部署契约](pytorch.md)
-- [开发规范](../AGENT.md)
+- [开发规范](agent.md)
+- [推理机环境](inference-env.md)
+- [文档索引](README.md)

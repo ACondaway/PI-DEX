@@ -9,6 +9,13 @@ dependencies = [
 
 [project.scripts]
 pi-dex-train-pytorch = "pi_dex.training_launcher:main"
+pi-dex-volc-train = "pi_dex.volc_launch:main"
+pi-dex-realtime-infer = "pi_dex.realtime_inference:main"
+pi-dex-dataset-inventory = "pi_dex.dataset_inventory:main"
+pi-dex-prepare-dataset = "pi_dex.dataset_prepare:main"
+pi-dex-serve = "pi_dex.policy_server:main"
+pi-dex-serve-probe = "pi_dex.policy_server_probe:main"
+pi-dex-robot-client = "pi_dex.robot_client:main"
 
 [project.optional-dependencies]
 pytorch = [
@@ -39,3 +46,15 @@ extend-exclude = ["openpi"]
 [tool.ruff.lint.per-file-ignores]
 # Keep the core package importable without the vendored OpenPI/JAX training stack.
 "src/pi_dex/openpi_integration.py" = ["PLC0415"]
+"src/pi_dex/convert_pi05.py" = ["PLC0415"]
+"src/pi_dex/parity_pi05.py" = ["PLC0415"]
+"src/pi_dex/checkpoint_manager.py" = ["PLC0415"]
+"src/pi_dex/pi05_weights.py" = ["PLC0415"]
+"src/pi_dex/distributed.py" = ["PLC0415"]
+"src/pi_dex/realtime_inference.py" = ["PLC0415"]
+"src/pi_dex/realtime_observation.py" = ["PLC0415"]
+"src/pi_dex/north_codec.py" = ["PLC0415"]
+"src/pi_dex/robot_client.py" = ["PLC0415"]
+# Optional HDF5/Pillow/OpenPI imports stay local so base env without those extras still imports.
+"src/pi_dex/sharpa_dataset.py" = ["PLC0415"]
+"src/pi_dex/training_runner.py" = ["PLC0415"]

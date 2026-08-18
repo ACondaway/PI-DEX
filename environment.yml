@@ -1,0 +1,20 @@
+# PI-DEX root development environment (miniconda).
+#
+#   bash scripts/setup_conda_env.sh
+#   source /mnt/netdata/Team/Personal/congsheng/miniconda/etc/profile.d/conda.sh
+#   conda activate pi-dex
+#
+# Torch is installed with pip to keep the pyproject pin torch==2.7.1.
+
+name: pi-dex
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - numpy>=1.22.4,<2.0.0
+  - pytest>=8.3.4
+  - ruff>=0.8.6
+  - pip:
+      - torch==2.7.1

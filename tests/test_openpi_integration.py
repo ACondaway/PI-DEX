@@ -627,7 +627,7 @@ def test_compute_stats_requires_unbatched_one_dimensional_state(
         compute_bimanual_normalization_stats(dataset, data_config, action_spec)
 
 
-def test_custom_dataset_loader_rejects_initialized_distributed(
+def test_custom_dataset_loader_requires_false_shuffle_when_distributed(
     action_spec: BimanualActionSpec,
     monkeypatch,
 ) -> None:
@@ -635,11 +635,13 @@ def test_custom_dataset_loader_rejects_initialized_distributed(
     torch_module.distributed = types.SimpleNamespace(
         is_available=lambda: True,
         is_initialized=lambda: True,
+        get_world_size=lambda: 2,
+        get_rank=lambda: 0,
     )
     monkeypatch.setitem(sys.modules, "torch", torch_module)
     model_config = make_model_config()
 
-    with pytest.raises(NotImplementedError, match=r"torch\.distributed/DDP"):
+    with pytest.raises(ValueError, match=r"shuffle must be False under DDP"):
         create_pytorch_data_loader_from_dataset(
             object(),
             make_bimanual_data_factory(action_spec, FakeDataConfig()),
@@ -651,6 +653,34 @@ def test_custom_dataset_loader_rejects_initialized_distributed(
             num_workers=0,
             seed=0,
             skip_norm_stats=True,
+        )
+
+
+def test_custom_dataset_loader_rejects_distributed_false_when_initialized(
+    action_spec: BimanualActionSpec,
+    monkeypatch,
+) -> None:
+    torch_module = types.ModuleType("torch")
+    torch_module.distributed = types.SimpleNamespace(
+        is_available=lambda: True,
+        is_initialized=lambda: True,
+    )
+    monkeypatch.setitem(sys.modules, "torch", torch_module)
+    model_config = make_model_config()
+
+    with pytest.raises(ValueError, match=r"distributed=False conflicts"):
+        create_pytorch_data_loader_from_dataset(
+            object(),
+            make_bimanual_data_factory(action_spec, FakeDataConfig()),
+            pathlib.Path("/assets"),
+            model_config,
+            action_spec,
+            batch_size=2,
+            shuffle=False,
+            num_workers=0,
+            seed=0,
+            skip_norm_stats=True,
+            distributed=False,
         )
 
 
