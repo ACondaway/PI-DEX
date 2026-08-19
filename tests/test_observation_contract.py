@@ -19,6 +19,7 @@ from tests.helpers import spec_for_representation
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 UNREVIEWED_CONTRACT = REPO_ROOT / "configs/site/joint_29d_observation.unreviewed.json"
+K50_CONTRACT = REPO_ROOT / "configs/site/joint_29d_observation.k50.reviewed.json"
 
 
 def test_trim_padded_jpeg_cuts_at_final_eoi_not_trailing_zeros() -> None:
@@ -71,3 +72,21 @@ def test_reviewed_contract_requires_reviewer(tmp_path: Path) -> None:
     bad.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(ValueError, match="reviewed_by"):
         load_observation_contract(bad)
+
+
+def test_k50_reviewed_contract_is_fifty_physical_steps(action_spec) -> None:
+    contract = load_observation_contract(K50_CONTRACT)
+    assert contract.review_status is ReviewStatus.REVIEWED
+    assert contract.physical_horizon == 50
+    contract.require_reviewed_for_training()
+    joint_spec = dataclasses.replace(
+        spec_for_representation(action_spec, ActionRepresentation.JOINT_29D),
+        physical_horizon=contract.physical_horizon,
+        timebase=ActionTimebase.RAW_CONTROL_60_HZ,
+        control_frequency_hz=contract.control_frequency_hz,
+        max_group_timestamp_skew_ms=contract.max_group_timestamp_skew_ms,
+        max_alignment_timestamp_error_ms=contract.max_alignment_timestamp_error_ms,
+        max_control_period_error_ms=contract.max_control_period_error_ms,
+    )
+    contract.validate_against_action_spec(joint_spec)
+    assert joint_spec.model_action_horizon == 100

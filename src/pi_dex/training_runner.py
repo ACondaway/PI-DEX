@@ -23,6 +23,8 @@ import argparse
 from collections.abc import Mapping, Sequence
 import dataclasses
 import json
+import math
+import os
 import pathlib
 from typing import Any
 import uuid
@@ -47,6 +49,7 @@ from pi_dex.parameter_manifest import require_full_finetune_manifest
 from pi_dex.pi05_weights import load_verified_pi05_base
 from pi_dex.pi05_weights import require_converted_base_dir
 from pi_dex.sharpa_data import EpisodeActionProvenance
+from pi_dex.sharpa_dataset import EpisodeRef
 from pi_dex.sharpa_dataset import SharpaJoint29dDataset
 from pi_dex.sharpa_dataset import SyntheticJoint29dDataset
 from pi_dex.sharpa_dataset import build_sample_index
@@ -94,14 +97,24 @@ def run(context: PytorchTrainingLaunchContext) -> int:
         command_semantics_version=args.command_semantics_version,
         hand_mapping_version=args.hand_mapping_version,
     )
+    print(f"{args.mode}: discovering episodes under {args.dataset_root}", flush=True)
     episodes = discover_episodes(args.dataset_root)
     if args.mode in {"validate-data", "compute-norm-stats", "train"}:
         split = SplitName(args.split)
         episodes = filter_episodes_for_split(episodes, contract=contract, split=split)
     if args.max_episodes is not None:
         episodes = episodes[: args.max_episodes]
+    print(f"{args.mode}: episodes={len(episodes)}", flush=True)
     if args.mode == "compute-norm-stats" and not args.norm_legacy:
         return _run_compute_norm_stats_fast(
+            episodes=episodes,
+            spec=spec,
+            contract=contract,
+            provenance=provenance,
+            args=args,
+        )
+    if args.mode == "train":
+        return _run_train(
             episodes=episodes,
             spec=spec,
             contract=contract,
@@ -131,8 +144,6 @@ def run(context: PytorchTrainingLaunchContext) -> int:
             return _run_validate_data(dataset=dataset, contract=contract, args=args)
         if args.mode == "compute-norm-stats":
             return _run_compute_norm_stats(dataset=dataset, spec=spec, args=args)
-        if args.mode == "train":
-            return _run_train(dataset=dataset, spec=spec, contract=contract, args=args)
         raise ValueError(f"unsupported mode {args.mode!r}")
     finally:
         dataset.close()
@@ -331,9 +342,10 @@ def _write_norm_stats_payload(
 
 def _run_train(
     *,
-    dataset: SharpaJoint29dDataset,
+    episodes: Sequence[EpisodeRef],
     spec: BimanualActionSpec,
     contract: SharpaObservationContract,
+    provenance: EpisodeActionProvenance,
     args: argparse.Namespace,
 ) -> int:
     if not args.pytorch_weight_path:
@@ -346,6 +358,7 @@ def _run_train(
         raise ValueError("train mode requires --checkpoint-dir for atomic publish")
     checkpoint_dir = pathlib.Path(args.checkpoint_dir)
 
+    print("train: importing torch / OpenPI (this can take a minute on VEFS)", flush=True)
     try:
         from openpi.models_pytorch.pi0_pytorch import PI0Pytorch
         from openpi.shared import normalize as openpi_normalize
@@ -377,6 +390,11 @@ def _run_train(
     world_size = 1
     local_rank = 0
     if use_distributed:
+        print(
+            f"train: init_process_group RANK={os.environ.get('RANK')} "
+            f"WORLD_SIZE={os.environ.get('WORLD_SIZE')} LOCAL_RANK={os.environ.get('LOCAL_RANK')}",
+            flush=True,
+        )
         rank, world_size, local_rank = init_process_group()
         device = device_for_rank(local_rank=local_rank, requested=args.device)
     else:
@@ -393,7 +411,45 @@ def _run_train(
     if use_distributed:
         barrier()
 
+    dataset = None
     try:
+        sample_index: tuple | None = None
+        if (not use_distributed) or rank == 0:
+            sample_index = build_sample_index(
+                episodes,
+                spec=spec,
+                contract=contract,
+                provenance=provenance,
+                max_episodes=None,
+            )
+            if args.max_samples is not None:
+                sample_index = sample_index[: args.max_samples]
+        if use_distributed:
+            import torch.distributed as dist
+
+            payload: list[Any] = [sample_index]
+            dist.broadcast_object_list(payload, src=0)
+            sample_index = payload[0]
+            barrier()
+        if sample_index is None:
+            raise RuntimeError("train: sample_index was not broadcast")
+
+        dataset = SharpaJoint29dDataset(
+            episodes=episodes,
+            sample_index=sample_index,
+            spec=spec,
+            contract=contract,
+            provenance=provenance,
+            require_reviewed=not args.allow_unreviewed_contract,
+        )
+        if is_main_process(rank=rank):
+            print(
+                f"train: dataset windows={len(sample_index)} episodes={len(episodes)} "
+                f"horizon={spec.physical_horizon} device={device}",
+                flush=True,
+            )
+
+        print(f"train: loading converted pi05_base from {converted_base}", flush=True)
         return _run_train_body(
             dataset=dataset,
             spec=spec,
@@ -421,6 +477,8 @@ def _run_train(
             barrier=barrier,
         )
     finally:
+        if dataset is not None:
+            dataset.close()
         if use_distributed:
             cleanup_process_group()
 
@@ -467,16 +525,26 @@ def _run_train_body(
         raise ValueError("model dtype must match --dtype (no silent rewrite)")
 
     model = PI0Pytorch(model_config).to(device)
+    if is_main_process(rank=rank):
+        print(f"train: instantiated PI0Pytorch action_horizon={model_config.action_horizon}", flush=True)
     parent_provenance = load_verified_pi05_base(
         model,
         converted_base,
         expected_weights_sha256=args.expected_base_sha256 or None,
     )
+    if is_main_process(rank=rank):
+        print("train: converted pi05_base loaded", flush=True)
     parameter_manifests = build_parameter_manifests(model)
     require_full_finetune_manifest(parameter_manifests)
 
-    learning_rate = float(args.learning_rate)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+    peak_lr, warmup_steps, decay_steps, end_lr = resolve_lr_schedule(
+        peak_lr=float(args.learning_rate),
+        warmup_steps=int(args.lr_warmup_steps),
+        decay_steps=args.lr_decay_steps,
+        end_lr=args.lr_end,
+        max_steps=args.max_steps,
+    )
+    optimizer = torch.optim.AdamW(model.parameters(), lr=peak_lr)
     global_step = 0
     run_id = args.run_id or f"joint29d-{uuid.uuid4().hex[:10]}"
     next_sample_index = 0
@@ -543,10 +611,19 @@ def _run_train_body(
     configured = data_factory.create(assets_root, model_config)
     data_factory = BimanualDataConfigFactory(_PinnedFactory(configured), spec)
 
+    order_len = len(sample_order)
+    wrap_order = args.max_steps is not None
+    if wrap_order:
+        if order_len == 0:
+            raise ValueError("train cursor exhausted: ordered dataset is empty")
+        start_index = int(next_sample_index) % order_len
+    else:
+        start_index = int(next_sample_index)
     train_dataset = _OrderedModelInputDataset(
         dataset,
         order=sample_order,
-        start_index=next_sample_index,
+        start_index=start_index,
+        wrap=wrap_order,
     )
     remaining = len(train_dataset)
     if remaining == 0:
@@ -554,13 +631,17 @@ def _run_train_body(
 
     local_batch_size = int(args.batch_size)
     global_batch_size = local_batch_size * world_size
-    if use_distributed:
+    if args.max_steps is not None:
+        planned_batches = int(args.max_steps) - int(global_step)
+        if planned_batches <= 0:
+            raise ValueError(
+                f"already at or past --max-steps {args.max_steps} (global_step={global_step})"
+            )
+    elif use_distributed:
         samples_per_rank = _distributed_sampler_num_samples(remaining, world_size=world_size)
         planned_batches = samples_per_rank // local_batch_size
     else:
         planned_batches = remaining // local_batch_size
-    if args.max_steps is not None:
-        planned_batches = min(planned_batches, args.max_steps)
     if planned_batches <= 0:
         raise ValueError("no full batches remain after resume cursor / batch_size / world_size")
 
@@ -597,7 +678,10 @@ def _run_train_body(
                 "batch_size": local_batch_size,
                 "global_batch_size": global_batch_size,
                 "world_size": world_size,
-                "learning_rate": learning_rate,
+                "learning_rate": peak_lr,
+                "lr_warmup_steps": warmup_steps,
+                "lr_decay_steps": decay_steps,
+                "lr_end": end_lr,
                 "max_steps": args.max_steps,
                 "save_interval": args.save_interval,
                 "log_interval": args.log_interval,
@@ -608,6 +692,11 @@ def _run_train_body(
             run_dir=checkpoint_dir,
             resume=resume_wandb,
         )
+        print(
+            f"LR schedule: warmup={warmup_steps} peak={peak_lr:.2e} "
+            f"decay_steps={decay_steps} end={end_lr:.2e} max_steps={args.max_steps}",
+            flush=True,
+        )
 
     losses: list[float] = []
     log_buffer: list[dict[str, float]] = []
@@ -616,9 +705,27 @@ def _run_train_body(
     last_saved_step = -1
     log_interval = max(1, int(args.log_interval))
     save_interval = int(args.save_interval)
+    step_lr = cosine_warmup_decay_lr(
+        global_step,
+        peak_lr=peak_lr,
+        warmup_steps=warmup_steps,
+        decay_steps=decay_steps,
+        end_lr=end_lr,
+    )
+    _set_optimizer_lr(optimizer, step_lr)
+    if is_main_process(rank=rank):
+        print(f"train: entering loop planned_batches={planned_batches}", flush=True)
 
     try:
         for batch_observation, batch_actions in loader:
+            step_lr = cosine_warmup_decay_lr(
+                global_step,
+                peak_lr=peak_lr,
+                warmup_steps=warmup_steps,
+                decay_steps=decay_steps,
+                end_lr=end_lr,
+            )
+            _set_optimizer_lr(optimizer, step_lr)
             observation = _tree_to_device(batch_observation, device)
             actions = batch_actions.to(device=device, dtype=torch.float32)
             result = trainer.train_step(observation, actions)
@@ -636,15 +743,16 @@ def _run_train_body(
                     grad_norm_value = float(grad_tensor)
 
             if is_main_process(rank=rank):
-                entry: dict[str, float] = {"loss": loss_value}
+                entry: dict[str, float] = {"loss": loss_value, "learning_rate": step_lr}
                 if grad_norm_value is not None:
                     entry["grad_norm"] = grad_norm_value
                 log_buffer.append(entry)
                 if global_step % log_interval == 0:
                     avg_loss = sum(item["loss"] for item in log_buffer) / len(log_buffer)
+                    avg_lr = sum(item["learning_rate"] for item in log_buffer) / len(log_buffer)
                     metrics: dict[str, Any] = {
                         "loss": avg_loss,
-                        "learning_rate": learning_rate,
+                        "learning_rate": avg_lr,
                         "samples": samples_consumed_local * world_size,
                     }
                     grad_vals = [item["grad_norm"] for item in log_buffer if "grad_norm" in item]
@@ -653,7 +761,7 @@ def _run_train_body(
                     log_train_metrics(wandb_run, metrics, step=global_step)
                     print(
                         f"step={global_step} loss={avg_loss:.6f} "
-                        f"lr={learning_rate:.2e} world_size={world_size}",
+                        f"lr={avg_lr:.2e} world_size={world_size}",
                         flush=True,
                     )
                     log_buffer.clear()
@@ -684,7 +792,7 @@ def _run_train_body(
                     contract=contract,
                     args=args,
                     device=device,
-                    learning_rate=learning_rate,
+                    learning_rate=step_lr,
                     local_batch_size=local_batch_size,
                     global_batch_size=global_batch_size,
                     world_size=world_size,
@@ -728,7 +836,7 @@ def _run_train_body(
                 contract=contract,
                 args=args,
                 device=device,
-                learning_rate=learning_rate,
+                learning_rate=step_lr,
                 local_batch_size=local_batch_size,
                 global_batch_size=global_batch_size,
                 world_size=world_size,
@@ -743,11 +851,12 @@ def _run_train_body(
         if is_main_process(rank=rank):
             if log_buffer:
                 avg_loss = sum(item["loss"] for item in log_buffer) / len(log_buffer)
+                avg_lr = sum(item["learning_rate"] for item in log_buffer) / len(log_buffer)
                 log_train_metrics(
                     wandb_run,
                     {
                         "loss": avg_loss,
-                        "learning_rate": learning_rate,
+                        "learning_rate": avg_lr,
                         "samples": samples_consumed_local * world_size,
                     },
                     step=global_step,
@@ -817,6 +926,13 @@ def _publish_train_step(
         "world_size": int(world_size),
         "global_batch_size": int(global_batch_size),
     }
+    _, resolved_warmup, resolved_decay, resolved_end = resolve_lr_schedule(
+        peak_lr=float(args.learning_rate),
+        warmup_steps=int(args.lr_warmup_steps),
+        decay_steps=args.lr_decay_steps,
+        end_lr=args.lr_end,
+        max_steps=args.max_steps,
+    )
     step_dir = checkpoint_dir / str(global_step)
     return publish_training_checkpoint(
         publish_dir=step_dir,
@@ -844,6 +960,10 @@ def _publish_train_step(
             "dtype": args.dtype,
             "device": str(device),
             "learning_rate": learning_rate,
+            "peak_learning_rate": float(args.learning_rate),
+            "lr_warmup_steps": resolved_warmup,
+            "lr_decay_steps": resolved_decay,
+            "lr_end": resolved_end,
             "batch_size": local_batch_size,
             "global_batch_size": global_batch_size,
             "world_size": world_size,
@@ -856,10 +976,75 @@ def _publish_train_step(
     )
 
 
+def cosine_warmup_decay_lr(
+    step: int,
+    *,
+    peak_lr: float,
+    warmup_steps: int,
+    decay_steps: int,
+    end_lr: float,
+) -> float:
+    """OpenPI / optax ``warmup_cosine_decay_schedule`` evaluated at ``step``.
+
+    Warmup is linear from ``peak_lr / (warmup_steps + 1)`` to ``peak_lr``. Cosine
+    then decays to ``end_lr`` over ``decay_steps`` total steps (warmup included).
+    ``decay_steps == 0`` keeps a constant ``peak_lr`` after warmup.
+    """
+    if step < 0:
+        raise ValueError(f"step: expected >= 0, got {step}")
+    if warmup_steps < 0:
+        raise ValueError(f"warmup_steps: expected >= 0, got {warmup_steps}")
+    if decay_steps < 0:
+        raise ValueError(f"decay_steps: expected >= 0, got {decay_steps}")
+    if peak_lr < 0 or end_lr < 0:
+        raise ValueError(f"learning rates must be >= 0, got peak_lr={peak_lr} end_lr={end_lr}")
+
+    if warmup_steps > 0 and step < warmup_steps:
+        init_lr = peak_lr / (warmup_steps + 1)
+        return init_lr + (peak_lr - init_lr) * step / warmup_steps
+    if decay_steps <= warmup_steps:
+        return peak_lr
+    progress = min(1.0, (step - warmup_steps) / (decay_steps - warmup_steps))
+    cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
+    return end_lr + (peak_lr - end_lr) * cosine
+
+
+def resolve_lr_schedule(
+    *,
+    peak_lr: float,
+    warmup_steps: int,
+    decay_steps: int | None,
+    end_lr: float | None,
+    max_steps: int | None,
+) -> tuple[float, int, int, float]:
+    """Resolve peak / warmup / decay / end LR, matching OpenPI when a long run fits.
+
+    ``decay_steps`` defaults to ``max_steps``. ``end_lr`` defaults to ``0.1 * peak_lr``.
+    If the run is too short to fit warmup then cosine (``warmup_steps >= decay_steps``),
+    keep a constant peak LR so 2-step smokes and 1k-step jobs stay at ``--learning-rate``.
+    """
+    if peak_lr <= 0:
+        raise ValueError(f"--learning-rate must be > 0, got {peak_lr}")
+    if warmup_steps < 0:
+        raise ValueError(f"--lr-warmup-steps must be >= 0, got {warmup_steps}")
+    resolved_decay = int(decay_steps) if decay_steps is not None else (int(max_steps) if max_steps is not None else 0)
+    if resolved_decay < 0:
+        raise ValueError(f"--lr-decay-steps must be >= 0, got {resolved_decay}")
+    resolved_end = float(end_lr) if end_lr is not None else peak_lr * 0.1
+    if resolved_end < 0:
+        raise ValueError(f"--lr-end must be >= 0, got {resolved_end}")
+    if resolved_decay > 0 and warmup_steps >= resolved_decay:
+        return peak_lr, 0, 0, resolved_end
+    return peak_lr, int(warmup_steps), resolved_decay, resolved_end
+
+
+def _set_optimizer_lr(optimizer: Any, lr: float) -> None:
+    for group in optimizer.param_groups:
+        group["lr"] = float(lr)
+
+
 def _distributed_sampler_num_samples(dataset_length: int, *, world_size: int) -> int:
     """Mirror ``torch.utils.data.distributed.DistributedSampler`` with ``drop_last=True``."""
-    import math
-
     if world_size <= 0:
         raise ValueError(f"world_size: expected positive int, got {world_size}")
     if dataset_length % world_size != 0:
@@ -929,17 +1114,33 @@ class _ModelInputDataset:
 
 @dataclasses.dataclass(frozen=True)
 class _OrderedModelInputDataset:
-    """Deterministic sample order with an absolute resume cursor."""
+    """Deterministic sample order with an absolute resume cursor.
+
+    ``wrap=True`` keeps a full-length cyclic view so ``--max-steps`` can exceed one
+    epoch; OpenPI's TorchDataLoader already loops the dataset when ``num_batches``
+    is larger than one pass.
+    """
 
     dataset: Any
     order: tuple[int, ...]
     start_index: int = 0
+    wrap: bool = False
 
     def __post_init__(self) -> None:
+        if self.wrap:
+            if not self.order:
+                raise ValueError("wrap=True requires a non-empty order")
+            if self.start_index < 0 or self.start_index >= len(self.order):
+                raise ValueError(
+                    f"start_index out of range: {self.start_index} for wrap order length {len(self.order)}"
+                )
+            return
         if self.start_index < 0 or self.start_index > len(self.order):
             raise ValueError(f"start_index out of range: {self.start_index} for order length {len(self.order)}")
 
     def __len__(self) -> int:
+        if self.wrap:
+            return len(self.order)
         return len(self.order) - self.start_index
 
     def __getitem__(self, index: int) -> dict[str, Any]:
@@ -949,7 +1150,10 @@ class _OrderedModelInputDataset:
             index += len(self)
         if index < 0 or index >= len(self):
             raise IndexError(index)
-        absolute = self.order[self.start_index + index]
+        if self.wrap:
+            absolute = self.order[(self.start_index + index) % len(self.order)]
+        else:
+            absolute = self.order[self.start_index + index]
         sample = self.dataset[absolute]
         return {key: sample[key] for key in _MODEL_INPUT_KEYS}
 
@@ -1024,7 +1228,25 @@ def _parse_runner_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--dtype", choices=("bfloat16", "float32"), default="bfloat16")
     parser.add_argument("--batch-size", type=int, default=1, help="Local per-rank batch size")
     parser.add_argument("--max-steps", type=int, default=None)
-    parser.add_argument("--learning-rate", type=float, default=1e-5)
+    parser.add_argument("--learning-rate", type=float, default=1e-5, help="Peak AdamW lr (OpenPI cosine schedule)")
+    parser.add_argument(
+        "--lr-warmup-steps",
+        type=int,
+        default=1000,
+        help="Linear warmup steps before cosine decay (OpenPI default 1000)",
+    )
+    parser.add_argument(
+        "--lr-decay-steps",
+        type=int,
+        default=None,
+        help="Total cosine schedule length including warmup; default is --max-steps",
+    )
+    parser.add_argument(
+        "--lr-end",
+        type=float,
+        default=None,
+        help="Cosine end lr; default is 0.1 * --learning-rate",
+    )
     parser.add_argument("--grad-clip-norm", type=float, default=1.0)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
@@ -1100,6 +1322,14 @@ def _parse_runner_args(argv: Sequence[str]) -> argparse.Namespace:
         raise ValueError("--save-interval must be >= 0")
     if args.log_interval <= 0:
         raise ValueError("--log-interval must be >= 1")
+    if args.learning_rate <= 0:
+        raise ValueError("--learning-rate must be > 0")
+    if args.lr_warmup_steps < 0:
+        raise ValueError("--lr-warmup-steps must be >= 0")
+    if args.lr_decay_steps is not None and args.lr_decay_steps < 0:
+        raise ValueError("--lr-decay-steps must be >= 0")
+    if args.lr_end is not None and args.lr_end < 0:
+        raise ValueError("--lr-end must be >= 0")
     if args.norm_stride < 1:
         raise ValueError("--norm-stride must be >= 1")
     if args.norm_workers is not None and args.norm_workers < 1:

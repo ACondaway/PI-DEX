@@ -94,12 +94,53 @@ def build_sample_index(
     """Build start-frame indices that can host a full physical horizon.
 
     When ``provenance`` is provided, each candidate start is fully probed with
-    :func:`derive_bimanual_logical_action_chunk` so timestamp/cadence rejects are
-    excluded from the index (avoids mid-epoch training failures).
+    the same cadence/finite contract as training (vectorized per episode).
     """
+    selected = list(episodes) if max_episodes is None else list(episodes[:max_episodes])
+    if provenance is not None:
+        return _build_sample_index_vectorized(selected, spec=spec, contract=contract)
+    return _build_sample_index_horizon_only(selected, spec=spec, contract=contract)
+
+
+def _build_sample_index_vectorized(
+    selected: Sequence[EpisodeRef],
+    *,
+    spec: BimanualActionSpec,
+    contract: SharpaObservationContract,
+) -> tuple[SampleIndex, ...]:
+    from pi_dex.norm_compute import episode_valid_start_frames
+
+    indexes: list[SampleIndex] = []
+    total = len(selected)
+    print(
+        f"build_sample_index: vectorized episodes={total} horizon={spec.physical_horizon}",
+        flush=True,
+    )
+    for episode_index, episode in enumerate(selected):
+        starts = episode_valid_start_frames(episode, spec, contract)
+        for start in starts.tolist():
+            indexes.append(SampleIndex(episode_index=episode_index, start_aligned_frame=int(start)))
+        done = episode_index + 1
+        if done == 1 or done % 50 == 0 or done == total:
+            print(
+                f"build_sample_index: episodes {done}/{total} windows={len(indexes)}",
+                flush=True,
+            )
+    if not indexes:
+        raise ValueError(
+            f"build_sample_index: no valid start frames (episodes={total}, horizon={spec.physical_horizon})"
+        )
+    return tuple(indexes)
+
+
+def _build_sample_index_horizon_only(
+    selected: Sequence[EpisodeRef],
+    *,
+    spec: BimanualActionSpec,
+    contract: SharpaObservationContract,
+) -> tuple[SampleIndex, ...]:
     import h5py
 
-    selected = list(episodes) if max_episodes is None else list(episodes[:max_episodes])
     indexes: list[SampleIndex] = []
     horizon = spec.physical_horizon
     for episode_index, episode in enumerate(selected):
@@ -114,19 +155,11 @@ def build_sample_index(
                         f"!= aligned N={aligned_length}"
                     )
                 valid_mask = sub_state == 1
-            # Raw 60 Hz horizon needs K consecutive raw rows after aligned start.
             for start in range(aligned_length):
                 if valid_mask is not None and not bool(valid_mask[start]):
                     continue
                 try:
                     _probe_action_horizon_fits(handle, start_aligned_frame=start, spec=spec)
-                    if provenance is not None:
-                        _load_action_chunk(
-                            handle,
-                            start_aligned_frame=start,
-                            spec=spec,
-                            provenance=provenance,
-                        )
                 except ValueError:
                     continue
                 indexes.append(SampleIndex(episode_index=episode_index, start_aligned_frame=start))

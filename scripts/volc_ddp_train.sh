@@ -57,6 +57,9 @@ cd "${ROOT}"
 : "${MAX_STEPS:=1000}"
 : "${BATCH_SIZE:=1}"
 : "${LEARNING_RATE:=1e-5}"
+: "${LR_WARMUP_STEPS:=}"
+: "${LR_DECAY_STEPS:=}"
+: "${LR_END:=}"
 : "${SEED:=0}"
 : "${DEVICE:=cuda}"
 : "${DTYPE:=bfloat16}"
@@ -90,6 +93,7 @@ if [[ "${VOLC_SKIP_CONDA}" != "1" ]]; then
 fi
 
 export PI_DEX_ARTIFACTS OPENPI_DATA_HOME
+export PYTHONUNBUFFERED=1
 export PATH="${PATH:-}"
 if [[ -n "${CONDA_PREFIX:-}" ]]; then
   export PATH="${CONDA_PREFIX}/bin:${PATH}"
@@ -179,6 +183,15 @@ if [[ ${#USER_ARGS[@]} -eq 0 ]]; then
   if [[ -n "${RESUME_FROM}" ]]; then
     TRAIN_ARGS+=(--resume-from "${RESUME_FROM}")
   fi
+  if [[ -n "${LR_WARMUP_STEPS}" ]]; then
+    TRAIN_ARGS+=(--lr-warmup-steps "${LR_WARMUP_STEPS}")
+  fi
+  if [[ -n "${LR_DECAY_STEPS}" ]]; then
+    TRAIN_ARGS+=(--lr-decay-steps "${LR_DECAY_STEPS}")
+  fi
+  if [[ -n "${LR_END}" ]]; then
+    TRAIN_ARGS+=(--lr-end "${LR_END}")
+  fi
   if [[ "${VOLC_WANDB}" == "1" ]]; then
     TRAIN_ARGS+=(--wandb --wandb-project "${WANDB_PROJECT}")
     if [[ -n "${WANDB_ENTITY}" ]]; then
@@ -198,6 +211,7 @@ echo "  dataset=${DATASET_ROOT}"
 echo "  assets=${ASSETS_DIR}/${ASSET_ID}"
 echo "  ckpt=${CHECKPOINT_DIR}"
 echo "  batch_size(local)=${BATCH_SIZE} max_steps=${MAX_STEPS} save_interval=${SAVE_INTERVAL}"
+echo "  lr=${LEARNING_RATE} warmup=${LR_WARMUP_STEPS:-default} decay=${LR_DECAY_STEPS:-max_steps} end=${LR_END:-0.1x}"
 echo "  wandb=${VOLC_WANDB} project=${WANDB_PROJECT}"
 
 DRY_FLAG=()

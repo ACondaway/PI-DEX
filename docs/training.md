@@ -147,8 +147,11 @@ pi-dex-artifacts/
 | `--device` | `cuda` | 单进程设备；DDP 下按 `LOCAL_RANK` 映射到 `cuda:{local_rank}` |
 | `--dtype` | `bfloat16` | 与 model dtype 一致；可部署路径用 bfloat16 |
 | `--batch-size` | `1` | **每卡 local batch**；global = local × world_size |
-| `--max-steps` | 无限制 | 最多训练多少个 **local** batch（每 rank） |
-| `--learning-rate` | `1e-5` | AdamW lr |
+| `--max-steps` | 无限制 | 最多训练多少个 **local** batch（每 rank）；大于一个 epoch 时循环数据 |
+| `--learning-rate` | `1e-5` | AdamW **peak** lr |
+| `--lr-warmup-steps` | `1000` | 线性 warmup 步数（OpenPI 默认）；短于 `--lr-decay-steps` 的 run 会退回恒定 peak |
+| `--lr-decay-steps` | `--max-steps` | cosine 总长度（含 warmup）；与 OpenPI `decay_steps` 一致 |
+| `--lr-end` | `0.1 × peak` | cosine 末端 lr |
 | `--grad-clip-norm` | `1.0` | 梯度裁剪 |
 | `--seed` | `0` | 样本顺序与 dataloader 种子；resume 必须一致 |
 | `--distributed` | off | 强制 DDP；`torchrun` 设置了 `RANK`/`WORLD_SIZE` 时也会自动开 |
@@ -400,6 +403,8 @@ USE_VOLC=1 bash scripts/train_ddp.sh --dataset-root ... --assets-dir ... --asset
 #   WANDB_API_KEY=...
 # 可选 source 默认集:
 #   set -a; source configs/volc/joint_29d_insert_battery.8gpu.env; set +a
+# Close_Bottle_Cap_v2:
+#   set -a; source configs/volc/joint_29d_close_bottle_cap_v2.8gpu.env; set +a
 
 bash /mnt/netdata/Team/Personal/congsheng/PI-DEX/scripts/volc_ddp_train.sh
 ```
@@ -490,6 +495,7 @@ torchrun --nnodes=2 --nproc_per_node=8 --node_rank=0 \
 | 两节点 8 卡 | 2 | 8 | 16 |
 
 Insert_Battery 默认 env：`configs/volc/joint_29d_insert_battery.8gpu.env`。
+Close_Bottle_Cap_v2：`configs/volc/joint_29d_close_bottle_cap_v2.8gpu.env`。
 
 ---
 

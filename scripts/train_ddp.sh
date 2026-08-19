@@ -48,6 +48,9 @@ cd "${ROOT}"
 : "${MAX_STEPS:=1000}"
 : "${BATCH_SIZE:=1}"
 : "${LEARNING_RATE:=1e-5}"
+: "${LR_WARMUP_STEPS:=}"
+: "${LR_DECAY_STEPS:=}"
+: "${LR_END:=}"
 : "${SEED:=0}"
 : "${DEVICE:=cuda}"
 : "${DTYPE:=bfloat16}"
@@ -84,6 +87,9 @@ while [[ $# -gt 0 ]]; do
     --max-steps) MAX_STEPS="$2"; shift 2 ;;
     --batch-size) BATCH_SIZE="$2"; shift 2 ;;
     --learning-rate) LEARNING_RATE="$2"; shift 2 ;;
+    --lr-warmup-steps) LR_WARMUP_STEPS="$2"; shift 2 ;;
+    --lr-decay-steps) LR_DECAY_STEPS="$2"; shift 2 ;;
+    --lr-end) LR_END="$2"; shift 2 ;;
     --seed) SEED="$2"; shift 2 ;;
     --device) DEVICE="$2"; shift 2 ;;
     --dtype) DTYPE="$2"; shift 2 ;;
@@ -201,6 +207,15 @@ if [[ -n "${MAX_EPISODES}" ]]; then
 fi
 if [[ -n "${RESUME_FROM}" ]]; then
   TRAIN_ARGS+=(--resume-from "${RESUME_FROM}")
+fi
+if [[ -n "${LR_WARMUP_STEPS}" ]]; then
+  TRAIN_ARGS+=(--lr-warmup-steps "${LR_WARMUP_STEPS}")
+fi
+if [[ -n "${LR_DECAY_STEPS}" ]]; then
+  TRAIN_ARGS+=(--lr-decay-steps "${LR_DECAY_STEPS}")
+fi
+if [[ -n "${LR_END}" ]]; then
+  TRAIN_ARGS+=(--lr-end "${LR_END}")
 fi
 TRAIN_ARGS+=("${EXTRA_ARGS[@]}")
 

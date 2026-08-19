@@ -166,10 +166,43 @@ def extract_episode_norm_batch(
     stride: int = 1,
 ) -> EpisodeNormBatch | None:
     """Load one episode's valid windows. Returns ``None`` when none survive."""
+    loaded = _load_episode_windows(episode, spec, contract, stride=stride)
+    if loaded is None:
+        return None
+    _starts, state, left_actions, right_actions = loaded
+    del _starts
+    return EpisodeNormBatch(
+        episode_id=episode.episode_id,
+        state=state,
+        left_actions=left_actions,
+        right_actions=right_actions,
+    )
+
+
+def episode_valid_start_frames(
+    episode: EpisodeRef,
+    spec: BimanualActionSpec,
+    contract: SharpaObservationContract,
+) -> np.ndarray:
+    """Aligned starts that pass cadence plus finite state/action checks."""
+    loaded = _load_episode_windows(episode, spec, contract, stride=1)
+    if loaded is None:
+        return np.zeros(0, dtype=np.int64)
+    starts, _state, _left, _right = loaded
+    return starts
+
+
+def _load_episode_windows(
+    episode: EpisodeRef,
+    spec: BimanualActionSpec,
+    contract: SharpaObservationContract,
+    *,
+    stride: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None:
     if stride < 1:
         raise ValueError(f"stride: expected >= 1, got {stride}")
     if spec.action_representation is not ActionRepresentation.JOINT_29D:
-        raise ValueError("extract_episode_norm_batch: only joint_29d is supported")
+        raise ValueError("_load_episode_windows: only joint_29d is supported")
     if contract.action_representation is not ActionRepresentation.JOINT_29D:
         raise ValueError("observation contract action_representation must be joint_29d")
 
@@ -216,17 +249,13 @@ def extract_episode_norm_batch(
         & np.isfinite(right_actions).all(axis=(1, 2))
     )
     if not bool(finite.all()):
+        starts = starts[finite]
         state = state[finite]
         left_actions = left_actions[finite]
         right_actions = right_actions[finite]
-    if state.shape[0] == 0:
+    if starts.shape[0] == 0:
         return None
-    return EpisodeNormBatch(
-        episode_id=episode.episode_id,
-        state=state,
-        left_actions=left_actions,
-        right_actions=right_actions,
-    )
+    return starts, state, left_actions, right_actions
 
 
 def compute_joint29d_normalization_stats(

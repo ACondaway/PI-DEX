@@ -97,6 +97,12 @@ bash scripts/prepare_task_dataset.sh \
 
 随后用 `scripts/train_ddp.sh --dataset-root .../prepared/Insert_Battery --robot-id POC22005 ...`。
 
+`Close_Bottle_Cap_v2` 同样走 overlay（原盘 251 episode 的 `task_instruction` 全空；prompt
+对齐 OpenData `Closethebottlecap` / Tighten Bottle Cap）。火山训练 env：
+`configs/volc/joint_29d_close_bottle_cap_v2.8gpu.env`（**K=50** 契约
+`configs/site/joint_29d_observation.k50.reviewed.json`，asset
+`sharpa_joint_29d_close_bottle_cap_v2_k50`）。
+
 **Cadence：** Sharpa 原始控制约 59.4 Hz。Insert_Battery 与 OpenData 都会出现一次漏拍
 （相邻 dt 误差 **16.835 ms**），从未观察到两次漏拍（>20 ms）。reviewed contract 因此把
 `max_control_period_error_ms` / `max_alignment_timestamp_error_ms` /
