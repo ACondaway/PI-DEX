@@ -30,10 +30,11 @@ from pi_dex.sharpa_data import CANONICAL_ALIGNED_TIME_FIELD
 from pi_dex.sharpa_data import AlignedTimeline
 from pi_dex.sharpa_data import CommandedJointGroup
 from pi_dex.sharpa_data import EpisodeActionProvenance
-from pi_dex.sharpa_data import _validate_absolute_action_contract
 from pi_dex.sharpa_data import _validate_provenance
+from pi_dex.joint_action_mode import maybe_convert_training_joint_actions
 from pi_dex.sharpa_dataset import EpisodeRef
 from pi_dex.sharpa_dataset import _command_group
+from pi_dex.spec import ActionMode
 from pi_dex.spec import ActionTimebase
 from pi_dex.spec import BimanualActionSpec
 from pi_dex.spec import HandNormalization
@@ -242,6 +243,12 @@ def _load_episode_windows(
         state_sources = _load_state_sources(handle, contract, aligned_length=aligned_length)
         state = _gather_state(state_sources, starts, state_dim=contract.state_dim)
         left_actions, right_actions = _gather_joint_actions(groups, starts, spec)
+        left_actions, right_actions = maybe_convert_training_joint_actions(
+            left_actions,
+            right_actions,
+            state,
+            spec=spec,
+        )
 
     finite = (
         np.isfinite(state).all(axis=1)
@@ -277,8 +284,11 @@ def compute_joint29d_normalization_stats(
     if spec.action_representation is not ActionRepresentation.JOINT_29D:
         raise ValueError("compute_joint29d_normalization_stats: only joint_29d is supported")
     contract.validate_against_action_spec(spec)
-    _validate_absolute_action_contract(spec)
     _validate_provenance(provenance, spec=spec)
+    if spec.action_mode not in {ActionMode.ABSOLUTE, ActionMode.DELTA}:
+        raise ValueError(
+            f"compute_joint29d_normalization_stats: unsupported action_mode {spec.action_mode.value!r}"
+        )
     if not episodes:
         raise ValueError("compute-norm-stats: expected a non-empty episode list")
     if workers < 1:

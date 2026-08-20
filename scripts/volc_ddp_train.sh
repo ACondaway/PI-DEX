@@ -69,6 +69,9 @@ cd "${ROOT}"
 : "${MAX_EPISODES:=}"
 : "${RESUME_FROM:=}"
 
+: "${ACTION_MODE:=absolute}"
+: "${COMMAND_SEMANTICS_VERSION:=sharpa_sdk_commanded_joint_position_absolute_v1}"
+
 : "${VOLC_WANDB:=1}"
 : "${WANDB_PROJECT:=pi-dex}"
 : "${WANDB_ENTITY:=}"
@@ -176,6 +179,8 @@ if [[ ${#USER_ARGS[@]} -eq 0 ]]; then
     --save-interval "${SAVE_INTERVAL}"
     --log-interval "${LOG_INTERVAL}"
     --output-json "${OUTPUT_JSON}"
+    --action-mode "${ACTION_MODE}"
+    --command-semantics-version "${COMMAND_SEMANTICS_VERSION}"
   )
   if [[ -n "${MAX_EPISODES}" ]]; then
     TRAIN_ARGS+=(--max-episodes "${MAX_EPISODES}")
@@ -211,6 +216,7 @@ echo "  dataset=${DATASET_ROOT}"
 echo "  assets=${ASSETS_DIR}/${ASSET_ID}"
 echo "  ckpt=${CHECKPOINT_DIR}"
 echo "  batch_size(local)=${BATCH_SIZE} max_steps=${MAX_STEPS} save_interval=${SAVE_INTERVAL}"
+echo "  action_mode=${ACTION_MODE} asset=${ASSET_ID}"
 echo "  lr=${LEARNING_RATE} warmup=${LR_WARMUP_STEPS:-default} decay=${LR_DECAY_STEPS:-max_steps} end=${LR_END:-0.1x}"
 echo "  wandb=${VOLC_WANDB} project=${WANDB_PROJECT}"
 

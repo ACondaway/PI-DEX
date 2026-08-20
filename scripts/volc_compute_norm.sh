@@ -48,6 +48,8 @@ cd "${ROOT}"
 
 : "${OUTPUT_JSON:=${PI_DEX_ARTIFACTS}/dataset/norm_opendata_full.json}"
 : "${NORM_FORCE:=0}"
+: "${ACTION_MODE:=absolute}"
+: "${COMMAND_SEMANTICS_VERSION:=sharpa_sdk_commanded_joint_position_absolute_v1}"
 : "${VOLC_DRY_RUN:=0}"
 : "${VOLC_SKIP_CONDA:=0}"
 : "${VOLC_SKIP_MLP:=0}"
@@ -131,6 +133,8 @@ if [[ ${#USER_ARGS[@]} -eq 0 ]]; then
     --assets-dir "${ASSETS_DIR}"
     --asset-id "${ASSET_ID}"
     --robot-id "${ROBOT_ID}"
+    --action-mode "${ACTION_MODE}"
+    --command-semantics-version "${COMMAND_SEMANTICS_VERSION}"
     --output-json "${OUTPUT_JSON}"
   )
   if [[ -n "${MAX_EPISODES}" ]]; then
@@ -152,6 +156,7 @@ fi
 echo "  dataset=${DATASET_ROOT}"
 echo "  assets=${ASSETS_DIR}/${ASSET_ID}"
 echo "  split=${SPLIT} output_json=${OUTPUT_JSON}"
+echo "  action_mode=${ACTION_MODE} asset=${ASSET_ID}"
 echo "  norm_workers=${NORM_WORKERS:-<auto>} stride=${NORM_STRIDE} OMP_NUM_THREADS=${OMP_NUM_THREADS}"
 
 if [[ -z "${TRAIN_BIN}" ]]; then

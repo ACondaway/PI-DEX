@@ -568,14 +568,14 @@ def test_derive_actions_rejects_non_absolute_semantics(action_spec: BimanualActi
         derive_left_actions(arm, hand, delta_spec, FakeKinematics())
 
 
-def test_joint_chunk_rejects_non_absolute_semantics(action_spec: BimanualActionSpec) -> None:
+def test_joint_chunk_accepts_delta_spec_for_absolute_hdf5_commands(action_spec: BimanualActionSpec) -> None:
     joint_delta_spec = dataclasses.replace(
         spec_for_representation(action_spec, ActionRepresentation.JOINT_29D),
         action_mode=ActionMode.DELTA,
     )
 
-    with pytest.raises(ValueError, match="only derive absolute"):
-        derive_chunk(joint_delta_spec, make_groups())
+    chunk = derive_chunk(joint_delta_spec, make_groups())
+    assert chunk.left_actions.shape == (joint_delta_spec.physical_horizon, 29)
 
 
 def test_direct_joint_actions_preserve_declared_column_order(

@@ -5,7 +5,8 @@ Samples are unbatched dictionaries with:
 * ``image`` / ``image_mask`` — OpenPI keys from the reviewed observation contract
 * ``state`` — 1-D float32 vector built from reviewed state columns
 * ``prompt`` — language string from the reviewed prompt policy
-* ``left_actions`` / ``right_actions`` — ``[K, 29]`` absolute commanded joints
+* ``left_actions`` / ``right_actions`` — ``[K, 29]`` training targets in ``spec.action_mode``
+  (absolute commanded joints, or scheme-A delta relative to ``state(t0)``)
 
 The dataset never constructs FK. Cartesian mode is intentionally unsupported here.
 """
@@ -33,6 +34,7 @@ from pi_dex.sharpa_data import AlignedTimeline
 from pi_dex.sharpa_data import CommandedJointGroup
 from pi_dex.sharpa_data import EpisodeActionProvenance
 from pi_dex.sharpa_data import derive_bimanual_logical_action_chunk
+from pi_dex.joint_action_mode import maybe_convert_training_joint_actions
 from pi_dex.spec import BimanualActionSpec
 
 _HDF5_NAME_RE = re.compile(r"^train_.*\.hdf5$")
@@ -240,13 +242,19 @@ class SharpaJoint29dDataset:
             spec=self._spec,
             provenance=self._provenance,
         )
+        left_actions, right_actions = maybe_convert_training_joint_actions(
+            chunk.left_actions,
+            chunk.right_actions,
+            state,
+            spec=self._spec,
+        )
         return {
             "image": images,
             "image_mask": image_masks,
             "state": state,
             "prompt": prompt,
-            "left_actions": chunk.left_actions,
-            "right_actions": chunk.right_actions,
+            "left_actions": left_actions,
+            "right_actions": right_actions,
             "episode_id": episode.episode_id,
             "start_aligned_frame": sample_ref.start_aligned_frame,
         }

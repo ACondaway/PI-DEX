@@ -347,9 +347,9 @@ def derive_bimanual_logical_action_chunk(
     if not isinstance(spec, BimanualActionSpec):
         raise TypeError(f"spec: expected BimanualActionSpec, got {type(spec).__name__}")
     validated_spec = dataclasses.replace(spec)
-    _validate_absolute_action_contract(validated_spec)
     _validate_provenance(provenance, spec=validated_spec)
     if validated_spec.action_representation is ActionRepresentation.CARTESIAN_31D:
+        _validate_absolute_action_contract(validated_spec)
         _validate_kinematics_provider(kinematics, spec=validated_spec)
     elif validated_spec.action_representation is ActionRepresentation.JOINT_29D:
         if kinematics is not None:
@@ -606,7 +606,6 @@ def derive_joint_actions(
         expected=ActionRepresentation.JOINT_29D,
         function_name="derive_joint_actions",
     )
-    _validate_absolute_action_contract(validated_spec)
     if not isinstance(side, HandSide):
         raise TypeError(f"side: expected HandSide, got {type(side).__name__}")
     _validate_provenance(provenance, spec=validated_spec)

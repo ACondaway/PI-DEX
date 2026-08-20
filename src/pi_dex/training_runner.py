@@ -77,6 +77,7 @@ def run(context: PytorchTrainingLaunchContext) -> int:
         command_semantics_version=args.command_semantics_version,
         hand_mapping_version=args.hand_mapping_version,
         clock_domain=args.clock_domain,
+        action_mode=ActionMode(args.action_mode),
     )
     context.bind_action_spec(spec)
 
@@ -157,12 +158,17 @@ def build_joint_spec_from_contract(
     command_semantics_version: str,
     hand_mapping_version: str,
     clock_domain: str,
+    action_mode: ActionMode = ActionMode.ABSOLUTE,
 ) -> BimanualActionSpec:
     """Build a joint_29d ``BimanualActionSpec`` aligned with the observation contract."""
     arm = tuple(f"left_arm_j{i}" for i in range(7))
     right_arm = tuple(f"right_arm_j{i}" for i in range(7))
     left_hand = tuple(f"left_hand_j{i}" for i in range(22))
     right_hand = tuple(f"right_hand_j{i}" for i in range(22))
+    if action_mode not in {ActionMode.ABSOLUTE, ActionMode.DELTA}:
+        raise ValueError(
+            f"build_joint_spec_from_contract: unsupported action_mode {action_mode.value!r}"
+        )
     return BimanualActionSpec(
         physical_horizon=contract.physical_horizon,
         timebase=contract.timebase,
@@ -170,7 +176,7 @@ def build_joint_spec_from_contract(
         robot_id=robot_id,
         embodiment_version=embodiment_version,
         coordinate_frame=None,
-        action_mode=ActionMode.ABSOLUTE,
+        action_mode=action_mode,
         action_representation=ActionRepresentation.JOINT_29D,
         hand_normalization=HandNormalization.PER_HAND,
         rotation_6d_convention=None,
@@ -1283,6 +1289,12 @@ def _parse_runner_args(argv: Sequence[str]) -> argparse.Namespace:
         "--allow-unreviewed-train-smoke",
         action="store_true",
         help="With --allow-unreviewed-contract, permit train for pipeline smoke only",
+    )
+    parser.add_argument(
+        "--action-mode",
+        choices=tuple(mode.value for mode in ActionMode if mode is not ActionMode.RESIDUAL),
+        default=ActionMode.ABSOLUTE.value,
+        help="Training target semantics: absolute commanded joints or scheme-A delta relative to state(t0)",
     )
     parser.add_argument("--robot-id", default="POC22027")
     parser.add_argument("--embodiment-version", default="sharpa_north_v1")

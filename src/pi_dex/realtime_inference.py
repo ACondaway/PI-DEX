@@ -25,11 +25,13 @@ import numpy as np
 
 from pi_dex.observation_contract import SharpaObservationContract
 from pi_dex.observation_contract import load_observation_contract
+from pi_dex.joint_action_mode import maybe_compose_deployment_joint_actions
 from pi_dex.realtime_actions import policy_result_to_sdk_action_dict
 from pi_dex.realtime_actions import sdk_action_pub_keys
 from pi_dex.realtime_observation import build_policy_observation_from_sdk
 from pi_dex.realtime_observation import resolve_live_prompt
 from pi_dex.realtime_observation import resolve_observation_timestamp_ns
+from pi_dex.spec import ActionMode
 from pi_dex.spec import BimanualActionSpec
 from pi_dex.training_runner import build_joint_spec_from_contract
 
@@ -126,11 +128,22 @@ def infer_sdk_actions(
         clock_domain=domain,
     )
     result = policy.infer(observation)
+    actions = result["actions"]
+    left = np.asarray(actions["left"], dtype=np.float32)
+    right = np.asarray(actions["right"], dtype=np.float32)
+    left, right = maybe_compose_deployment_joint_actions(
+        left,
+        right,
+        observation["state"],
+        spec=spec,
+    )
+    composed_result = dict(result)
+    composed_result["actions"] = {"left": left, "right": right}
     motor = None
     if include_motor_hold and "/state/motor/joint_angle" in sdk_observation:
         motor = np.asarray(sdk_observation["/state/motor/joint_angle"], dtype=np.float32)
-    sdk_actions = policy_result_to_sdk_action_dict(result, spec, motor_positions=motor)
-    return result, sdk_actions
+    sdk_actions = policy_result_to_sdk_action_dict(composed_result, spec, motor_positions=motor)
+    return composed_result, sdk_actions
 
 
 def run_control_loop(
@@ -197,6 +210,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--hand-mapping-version", default="sharpa_north_hand_mapping_v1")
     parser.add_argument("--clock-domain", default="unix_realtime")
+    parser.add_argument(
+        "--action-mode",
+        choices=(ActionMode.ABSOLUTE.value, ActionMode.DELTA.value),
+        default=ActionMode.ABSOLUTE.value,
+    )
     parser.add_argument("--allow-unreviewed-contract", action="store_true")
     parser.add_argument("--include-motor-hold", action="store_true")
     args = parser.parse_args(list(argv) if argv is not None else None)
@@ -211,6 +229,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         command_semantics_version=args.command_semantics_version,
         hand_mapping_version=args.hand_mapping_version,
         clock_domain=args.clock_domain,
+        action_mode=ActionMode(args.action_mode),
     )
 
     if args.mode == "print-action-keys":

@@ -395,6 +395,9 @@ USE_VOLC=1 bash scripts/train_ddp.sh --dataset-root ... --assets-dir ... --asset
 
 ### 5.1 推荐入口（火山引擎 MLP）
 
+控制台字段、env 变量表、现成 `configs/volc/*.env` 说明见专页
+**[volc-training.md](volc-training.md)**。
+
 **自定义启动命令**（脚本会 `conda activate pi-dex`、校验 `MLP_*` / `WANDB_API_KEY`，并带上
 最新的 `save-interval` / `wandb` / Insert_Battery 默认路径）：
 
@@ -402,8 +405,12 @@ USE_VOLC=1 bash scripts/train_ddp.sh --dataset-root ... --assets-dir ... --asset
 # 任务环境变量里先配好（不要把 key 写进仓库）:
 #   WANDB_API_KEY=...
 # 可选 source 默认集:
+#   set -a; source configs/volc/joint_29d_insert_battery.k50.8gpu.env; set +a
+# K=8 短 run:
 #   set -a; source configs/volc/joint_29d_insert_battery.8gpu.env; set +a
-# Close_Bottle_Cap_v2:
+# Close_Bottle_Cap_v2 K=50 delta:
+#   set -a; source configs/volc/joint_29d_close_bottle_cap_v2.k50.delta.8gpu.env; set +a
+# Close_Bottle_Cap_v2 K=50 absolute:
 #   set -a; source configs/volc/joint_29d_close_bottle_cap_v2.8gpu.env; set +a
 
 bash /mnt/netdata/Team/Personal/congsheng/PI-DEX/scripts/volc_ddp_train.sh
@@ -494,8 +501,11 @@ torchrun --nnodes=2 --nproc_per_node=8 --node_rank=0 \
 | 单节点 8 卡 | 1 | 8 | 8 |
 | 两节点 8 卡 | 2 | 8 | 16 |
 
-Insert_Battery 默认 env：`configs/volc/joint_29d_insert_battery.8gpu.env`。
-Close_Bottle_Cap_v2：`configs/volc/joint_29d_close_bottle_cap_v2.8gpu.env`。
+Insert_Battery K=50 delta：`configs/volc/joint_29d_insert_battery.k50.delta.8gpu.env`。  
+Insert_Battery K=50 absolute：`configs/volc/joint_29d_insert_battery.k50.8gpu.env`。  
+Insert_Battery K=8：`configs/volc/joint_29d_insert_battery.8gpu.env`。  
+Close_Bottle_Cap_v2 K=50 delta：`configs/volc/joint_29d_close_bottle_cap_v2.k50.delta.8gpu.env`。  
+Close_Bottle_Cap_v2 K=50 absolute：`configs/volc/joint_29d_close_bottle_cap_v2.8gpu.env`。
 
 ---
 

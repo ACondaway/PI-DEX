@@ -35,6 +35,7 @@ from pi_dex.realtime_observation import resolve_observation_timestamp_ns
 from pi_dex.sharpa_runtime_keys import DEFAULT_ACTION_PUB_DURATION_S
 from pi_dex.sharpa_runtime_keys import DEFAULT_ACTION_TOPIC
 from pi_dex.sharpa_runtime_keys import DEFAULT_OBSERVATION_TOPIC
+from pi_dex.spec import ActionMode
 from pi_dex.training_runner import build_joint_spec_from_contract
 
 logger = logging.getLogger(__name__)
@@ -364,6 +365,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--hand-mapping-version", default="sharpa_north_hand_mapping_v1")
     parser.add_argument("--clock-domain", default="unix_realtime")
+    parser.add_argument(
+        "--action-mode",
+        choices=(ActionMode.ABSOLUTE.value, ActionMode.DELTA.value),
+        default=ActionMode.ABSOLUTE.value,
+    )
     parser.add_argument("--serve-host", default="127.0.0.1")
     parser.add_argument("--serve-port", type=int, default=8000)
     parser.add_argument("--api-key", default="")
@@ -399,6 +405,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         command_semantics_version=args.command_semantics_version,
         hand_mapping_version=args.hand_mapping_version,
         clock_domain=args.clock_domain,
+        action_mode=ActionMode(args.action_mode),
     )
     prompt = args.prompt.strip() or None
     session = build_remote_policy(

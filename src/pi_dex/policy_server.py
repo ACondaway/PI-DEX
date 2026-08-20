@@ -25,6 +25,8 @@ from collections.abc import Mapping
 from collections.abc import Sequence
 from typing import Any
 
+from pi_dex.spec import ActionMode
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_HOST = "127.0.0.1"
@@ -194,6 +196,7 @@ def build_joint29d_server_policy(
     command_semantics_version: str = "sharpa_sdk_commanded_joint_position_absolute_v1",
     hand_mapping_version: str = "sharpa_north_hand_mapping_v1",
     clock_domain: str = "unix_realtime",
+    action_mode: str = ActionMode.ABSOLUTE.value,
     execution_horizon: int | None = None,
     default_prompt: str | None = None,
     pytorch_device: str | None = None,
@@ -214,6 +217,7 @@ def build_joint29d_server_policy(
         command_semantics_version=command_semantics_version,
         hand_mapping_version=hand_mapping_version,
         clock_domain=clock_domain,
+        action_mode=ActionMode(action_mode),
     )
     return load_joint29d_policy(
         checkpoint_dir=checkpoint_dir,
@@ -251,6 +255,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--hand-mapping-version", default="sharpa_north_hand_mapping_v1")
     parser.add_argument("--clock-domain", default="unix_realtime")
+    parser.add_argument(
+        "--action-mode",
+        choices=(ActionMode.ABSOLUTE.value, ActionMode.DELTA.value),
+        default=ActionMode.ABSOLUTE.value,
+        help="Policy output semantics; delta policies compose absolute commands on the robot bridge",
+    )
     parser.add_argument("--allow-unreviewed-contract", action="store_true")
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args(list(argv) if argv is not None else None)
@@ -270,6 +280,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         command_semantics_version=args.command_semantics_version,
         hand_mapping_version=args.hand_mapping_version,
         clock_domain=args.clock_domain,
+        action_mode=args.action_mode,
         execution_horizon=args.execution_horizon,
         default_prompt=args.default_prompt or None,
         pytorch_device=args.pytorch_device,
