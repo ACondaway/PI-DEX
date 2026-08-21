@@ -1,12 +1,12 @@
 import numpy as np
 import pytest
 
-from pi_dex.actions import MODEL_ACTION_DIM
-from pi_dex.actions import ActionRepresentation
-from pi_dex.openpi_transforms import PackBimanualActions
-from pi_dex.openpi_transforms import UnpackBimanualActions
-from pi_dex.openpi_transforms import ValidateBimanualSample
-from pi_dex.spec import BimanualActionSpec
+from pi_dex.core.actions import MODEL_ACTION_DIM
+from pi_dex.core.actions import ActionRepresentation
+from pi_dex.training.openpi_transforms import PackBimanualActions
+from pi_dex.training.openpi_transforms import UnpackBimanualActions
+from pi_dex.training.openpi_transforms import ValidateBimanualSample
+from pi_dex.core.spec import BimanualActionSpec
 from tests.helpers import spec_for_representation
 
 

@@ -3,10 +3,11 @@ import types
 import numpy as np
 import pytest
 
-from pi_dex.actions import ActionRepresentation
-from pi_dex.checkpoints import load_and_validate_training_contract
-from pi_dex.checkpoints import save_training_contract
-from pi_dex.spec import BimanualActionSpec
+from pi_dex.core.actions import MODEL_ACTION_DIM
+from pi_dex.core.actions import ActionRepresentation
+from pi_dex.training.checkpoints import load_and_validate_training_contract
+from pi_dex.training.checkpoints import save_training_contract
+from pi_dex.core.spec import BimanualActionSpec
 from tests.helpers import spec_for_representation
 
 openpi_normalize = pytest.importorskip("openpi.shared.normalize")
@@ -39,7 +40,7 @@ def test_openpi_normalization_file_round_trip_preserves_checkpoint_contract(
     }
     model_config = types.SimpleNamespace(
         pi05=True,
-        action_dim=32,
+        action_dim=MODEL_ACTION_DIM,
         action_horizon=4,
         dtype="bfloat16",
         paligemma_variant="gemma_2b",

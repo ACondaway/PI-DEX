@@ -9,21 +9,21 @@ import types
 import numpy as np
 import pytest
 
-from pi_dex.distributed import is_main_process
-from pi_dex.distributed import launched_under_torch_distributed
-from pi_dex.distributed import resolve_rank_world_local
-from pi_dex.distributed import unwrap_model
-from pi_dex.observation_contract import load_observation_contract
-from pi_dex.realtime_actions import JOINT_29D_DIM
-from pi_dex.realtime_actions import policy_result_to_sdk_action_dict
-from pi_dex.realtime_actions import split_joint_29d_hand_chunk
-from pi_dex.realtime_inference import synthesize_sdk_observation
-from pi_dex.realtime_observation import build_policy_observation_from_sdk
-from pi_dex.realtime_observation import hdf5_path_to_sdk_key
-from pi_dex.training_runner import _distributed_sampler_num_samples
-from pi_dex.training_runner import build_joint_spec_from_contract
-from pi_dex.volc_launch import build_torchrun_command
-from pi_dex.volc_launch import read_mlp_launch_env
+from pi_dex.training.distributed import is_main_process
+from pi_dex.training.distributed import launched_under_torch_distributed
+from pi_dex.training.distributed import resolve_rank_world_local
+from pi_dex.training.distributed import unwrap_model
+from pi_dex.data.observation_contract import load_observation_contract
+from pi_dex.robot.realtime_actions import JOINT_29D_DIM
+from pi_dex.robot.realtime_actions import policy_result_to_sdk_action_dict
+from pi_dex.robot.realtime_actions import split_joint_29d_hand_chunk
+from pi_dex.robot.realtime_inference import synthesize_sdk_observation
+from pi_dex.robot.realtime_observation import build_policy_observation_from_sdk
+from pi_dex.robot.realtime_observation import hdf5_path_to_sdk_key
+from pi_dex.training.training_runner import _distributed_sampler_num_samples
+from pi_dex.training.training_runner import build_joint_spec_from_contract
+from pi_dex.training.volc_launch import build_torchrun_command
+from pi_dex.training.volc_launch import read_mlp_launch_env
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -143,13 +143,15 @@ def test_policy_result_to_sdk_action_dict() -> None:
     assert len(sdk["/action/left_arm/joint_angle"]) == 2
     assert len(sdk["/action/left_arm/joint_angle"][0]) == 7
     assert len(sdk["/action/left_hand/joint_angle"][0]) == 22
-    arm, hand = split_joint_29d_hand_chunk(left)
+    assert len(sdk["/action/motor/joint_angle"][0]) == 7
+    arm, hand, motor = split_joint_29d_hand_chunk(left)
     assert arm.shape == (2, 7)
     assert hand.shape == (2, 22)
+    assert motor.shape == (2, 7)
 
 
 def test_realtime_convert_smoke_cli(tmp_path: pathlib.Path) -> None:
-    from pi_dex.realtime_inference import main
+    from pi_dex.robot.realtime_inference import main
 
     out = tmp_path / "out.json"
     code = main(
@@ -169,14 +171,14 @@ def test_realtime_convert_smoke_cli(tmp_path: pathlib.Path) -> None:
 
 
 def test_volc_ensure_distributed_flag() -> None:
-    from pi_dex.volc_launch import _ensure_runner_distributed_flag
+    from pi_dex.training.volc_launch import _ensure_runner_distributed_flag
 
     argv = [
         "pi-dex-train-pytorch",
         "--action-representation",
         "joint_29d",
         "--runner",
-        "pi_dex.training_runner:run",
+        "pi_dex.training.training_runner:run",
         "--",
         "--mode",
         "train",

@@ -6,10 +6,10 @@ import math
 
 import pytest
 
-from pi_dex.training_runner import _MODEL_INPUT_KEYS
-from pi_dex.training_runner import _OrderedModelInputDataset
-from pi_dex.training_runner import cosine_warmup_decay_lr
-from pi_dex.training_runner import resolve_lr_schedule
+from pi_dex.training.training_runner import _MODEL_INPUT_KEYS
+from pi_dex.training.training_runner import _OrderedModelInputDataset
+from pi_dex.training.training_runner import cosine_warmup_decay_lr
+from pi_dex.training.training_runner import resolve_lr_schedule
 
 
 def test_cosine_warmup_matches_openpi_endpoints() -> None:

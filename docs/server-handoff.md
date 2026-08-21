@@ -21,8 +21,8 @@
   （`reviewed_by=congsheng`）。未审阅模板仍保留供对比测试。
 - `pi05_base` 转换 + `parity_pi05` 轨迹对比已有本地证据；验证清单 A.2 仍缺发布方**预期**
   source manifest 批准与正式留证流程。
-- 真机推理入口已落地（`pi-dex-realtime-infer` / `pi_dex.realtime_*`）；完整
-  `BimanualController` 租约 / 急停 / 硬件 harness（阶段 4–6）仍未完成。
+- 真机推理入口已落地（`pi-dex-robot-client` / `pi_dex.robot`：OpenPI Runtime +
+  harobotsDL NorthZmqEnv）；完整 `BimanualController` 租约 / 急停 / 硬件 harness（阶段 4–6）仍未完成。
 - Cartesian / FK 未开始。
 - B.1/B.2 完整质量验收（held-out 指标、overfit 阈值登记）尚未按验证清单闭环记 PASS。
 

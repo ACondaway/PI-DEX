@@ -379,11 +379,9 @@ Activate:
   # export PI_DEX_ARTIFACTS=...
   # export OPENPI_DATA_HOME=\${PI_DEX_ARTIFACTS}/openpi-data
 
-GPU serve:
-  bash scripts/serve_joint29d.sh --checkpoint-dir /path/to/step
-
-Robot Zenoh bridge (needs --with-zenoh / robot-client profile):
-  bash scripts/robot_client_joint29d.sh --serve-host <GPU_IP>
+GPU one-shot (serve + bridge on same machine; use --with-zenoh):
+  bash scripts/run_robot_joint29d.sh --checkpoint-dir /path/to/step ...
+  # NUC only runs Sharpa start.sh — do not install pi-dex on the slave.
 
 Re-verify later:
   bash scripts/setup_inference_env.sh --verify-only --conda-root ${CONDA_ROOT}

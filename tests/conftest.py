@@ -1,11 +1,11 @@
 import pytest
 
-from pi_dex.actions import ActionRepresentation
-from pi_dex.spec import ActionMode
-from pi_dex.spec import ActionTimebase
-from pi_dex.spec import BimanualActionSpec
-from pi_dex.spec import HandNormalization
-from pi_dex.spec import Rotation6DConvention
+from pi_dex.core.actions import ActionRepresentation
+from pi_dex.core.spec import ActionMode
+from pi_dex.core.spec import ActionTimebase
+from pi_dex.core.spec import BimanualActionSpec
+from pi_dex.core.spec import HandNormalization
+from pi_dex.core.spec import Rotation6DConvention
 
 
 @pytest.fixture

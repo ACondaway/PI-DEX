@@ -16,3 +16,5 @@ wandb/
 # local conda leftovers if someone creates env inside the repo
 .env/
 .conda/
+
+harobotsDL/

@@ -9,13 +9,13 @@ from typing import Any
 import numpy as np
 import pytest
 
-from pi_dex.actions import JOINT_LOGICAL_ACTION_DIM
-from pi_dex.actions import ActionRepresentation
-from pi_dex.deployment import BimanualPolicyAdapter
-from pi_dex.deployment import SESSION_ID_FIELD
-from pi_dex.deployment import validate_deployment_metadata
-from pi_dex.policy_server import PiDexWebsocketPolicyServer
-from pi_dex.spec import BimanualActionSpec
+from pi_dex.core.actions import JOINT_LOGICAL_ACTION_DIM
+from pi_dex.core.actions import ActionRepresentation
+from pi_dex.serve.deployment import BimanualPolicyAdapter
+from pi_dex.serve.deployment import SESSION_ID_FIELD
+from pi_dex.serve.deployment import validate_deployment_metadata
+from pi_dex.serve.policy_server import PiDexWebsocketPolicyServer
+from pi_dex.core.spec import BimanualActionSpec
 from tests.helpers import spec_for_representation
 
 

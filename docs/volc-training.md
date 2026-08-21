@@ -30,6 +30,16 @@ Norm stats: [norm-compute.md](norm-compute.md). Dataset prep: [dataset.md](datas
 
 ## 2. Custom start command (copy-paste)
 
+**Close_Bottle_Cap_v2 (K=100, scheme-A delta, 80k steps):**
+
+```bash
+export WANDB_API_KEY="${WANDB_API_KEY}"
+set -a
+source /mnt/netdata/Team/Personal/congsheng/PI-DEX/configs/volc/joint_29d_close_bottle_cap_v2.k100.delta.8gpu.env
+set +a
+bash /mnt/netdata/Team/Personal/congsheng/PI-DEX/scripts/volc_ddp_train.sh
+```
+
 **Close_Bottle_Cap_v2 (K=50, scheme-A delta, 80k steps):**
 
 ```bash
@@ -130,6 +140,7 @@ Short runs (`warmup ≥ max_steps`) keep a **constant** peak LR (smoke jobs stay
 
 | File | Task | Notes |
 |------|------|--------|
+| `configs/volc/joint_29d_close_bottle_cap_v2.k100.delta.8gpu.env` | Close_Bottle_Cap_v2 | **K=100**, scheme-A **delta**, 80k steps |
 | `configs/volc/joint_29d_close_bottle_cap_v2.k50.delta.8gpu.env` | Close_Bottle_Cap_v2 | **K=50**, scheme-A **delta**, 80k steps |
 | `configs/volc/joint_29d_close_bottle_cap_v2.8gpu.env` | Close_Bottle_Cap_v2 | **K=50**, absolute, 80k steps |
 | `configs/volc/joint_29d_insert_battery.k50.delta.8gpu.env` | Insert_Battery | **K=50**, scheme-A **delta**, 80k steps |

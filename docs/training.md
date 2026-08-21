@@ -2,7 +2,7 @@
 
 本文说明当前 **`joint_29d`** 训练怎么跑、配置项做什么、本地开发机怎么测，以及火山引擎 / torchrun 多节点怎么部署。动作语义与 checkpoint 契约见 [pytorch.md](pytorch.md)；验收留证见 [server-validation.md](server-validation.md)。推理机环境见 [inference-env.md](inference-env.md)。
 
-> **范围：** 本文只覆盖 first-party runner `pi_dex.training_runner`。`cartesian_31d`、FSDP/LoRA/AMP、快系统不在此文档。
+> **范围：** 本文只覆盖 first-party runner `pi_dex.training.training_runner`。`cartesian_31d`、FSDP/LoRA/AMP、快系统不在此文档。
 
 ---
 
@@ -31,7 +31,7 @@
 ```bash
 pi-dex-train-pytorch \
   --action-representation joint_29d \
-  --runner pi_dex.training_runner:run -- \
+  --runner pi_dex.training.training_runner:run -- \
   --mode <mode> \
   ...runner 参数...
 ```
@@ -169,7 +169,7 @@ pi-dex-artifacts/
 | 参数 | 功能 |
 |------|------|
 | `--action-representation joint_29d` | 选择 29D 关节表示；Joint **禁止** FK factory |
-| `--runner pi_dex.training_runner:run` | first-party 训练入口 |
+| `--runner pi_dex.training.training_runner:run` | first-party 训练入口 |
 | `--fk-provider-factory` | 仅 `cartesian_31d` 使用 |
 
 ### 3.4 火山 / 分布式环境变量
@@ -209,7 +209,7 @@ pi-dex-artifacts/
 cd "${PI_DEX_REPO}"
 pi-dex-train-pytorch \
   --action-representation joint_29d \
-  --runner pi_dex.training_runner:run -- \
+  --runner pi_dex.training.training_runner:run -- \
   --mode synthetic-smoke \
   --observation-contract "${CONTRACT}" \
   --output-json "${PI_DEX_ARTIFACTS}/runs/synthetic-smoke.json"
@@ -220,7 +220,7 @@ pi-dex-train-pytorch \
 ```bash
 pi-dex-train-pytorch \
   --action-representation joint_29d \
-  --runner pi_dex.training_runner:run -- \
+  --runner pi_dex.training.training_runner:run -- \
   --mode validate-data \
   --observation-contract "${CONTRACT}" \
   --dataset-root "${DATASET_ROOT}" \
@@ -233,7 +233,7 @@ pi-dex-train-pytorch \
 ```bash
 pi-dex-train-pytorch \
   --action-representation joint_29d \
-  --runner pi_dex.training_runner:run -- \
+  --runner pi_dex.training.training_runner:run -- \
   --mode compute-norm-stats \
   --observation-contract "${CONTRACT}" \
   --dataset-root "${DATASET_ROOT}" \
@@ -254,7 +254,7 @@ rm -rf "${CKPT}"   # 仅开发机；正式环境禁止覆盖已有目录
 
 pi-dex-train-pytorch \
   --action-representation joint_29d \
-  --runner pi_dex.training_runner:run -- \
+  --runner pi_dex.training.training_runner:run -- \
   --mode train \
   --observation-contract "${CONTRACT}" \
   --dataset-root "${DATASET_ROOT}" \
@@ -294,7 +294,7 @@ rm -rf "${CKPT2}"
 
 pi-dex-train-pytorch \
   --action-representation joint_29d \
-  --runner pi_dex.training_runner:run -- \
+  --runner pi_dex.training.training_runner:run -- \
   --mode train \
   --observation-contract "${CONTRACT}" \
   --dataset-root "${DATASET_ROOT}" \
@@ -323,7 +323,7 @@ Resume 要求：`--seed`、`--batch-size`、`world_size`、dataset 长度与 `or
 torchrun --standalone --nproc-per-node=2 \
   "$(which pi-dex-train-pytorch)" \
   --action-representation joint_29d \
-  --runner pi_dex.training_runner:run -- \
+  --runner pi_dex.training.training_runner:run -- \
   --mode train \
   --observation-contract "${CONTRACT}" \
   --dataset-root "${DATASET_ROOT}" \
@@ -350,7 +350,7 @@ export MLP_WORKER_NUM=1 MLP_WORKER_GPU=2 MLP_ROLE_INDEX=0
 export MLP_WORKER_0_HOST=127.0.0.1 MLP_WORKER_0_PORT=29500
 pi-dex-volc-train --dry-run -- \
   --action-representation joint_29d \
-  --runner pi_dex.training_runner:run -- \
+  --runner pi_dex.training.training_runner:run -- \
   --mode train ...
 ```
 
@@ -408,6 +408,8 @@ USE_VOLC=1 bash scripts/train_ddp.sh --dataset-root ... --assets-dir ... --asset
 #   set -a; source configs/volc/joint_29d_insert_battery.k50.8gpu.env; set +a
 # K=8 短 run:
 #   set -a; source configs/volc/joint_29d_insert_battery.8gpu.env; set +a
+# Close_Bottle_Cap_v2 K=100 delta:
+#   set -a; source configs/volc/joint_29d_close_bottle_cap_v2.k100.delta.8gpu.env; set +a
 # Close_Bottle_Cap_v2 K=50 delta:
 #   set -a; source configs/volc/joint_29d_close_bottle_cap_v2.k50.delta.8gpu.env; set +a
 # Close_Bottle_Cap_v2 K=50 absolute:
@@ -437,7 +439,7 @@ VOLC_DRY_RUN=1 bash scripts/volc_ddp_train.sh
 ```bash
 bash scripts/volc_ddp_train.sh -- \
   --action-representation joint_29d \
-  --runner pi_dex.training_runner:run -- \
+  --runner pi_dex.training.training_runner:run -- \
   --mode train \
   --observation-contract "${CONTRACT}" \
   --dataset-root "${DATASET_ROOT}" \
@@ -477,7 +479,7 @@ torchrun --nnodes=2 --nproc_per_node=8 --node_rank=0 \
   --master_addr=<node0_ip> --master_port=29500 \
   "$(which pi-dex-train-pytorch)" \
   --action-representation joint_29d \
-  --runner pi_dex.training_runner:run -- \
+  --runner pi_dex.training.training_runner:run -- \
   --mode train ... --distributed
 ```
 
@@ -504,6 +506,7 @@ torchrun --nnodes=2 --nproc_per_node=8 --node_rank=0 \
 Insert_Battery K=50 delta：`configs/volc/joint_29d_insert_battery.k50.delta.8gpu.env`。  
 Insert_Battery K=50 absolute：`configs/volc/joint_29d_insert_battery.k50.8gpu.env`。  
 Insert_Battery K=8：`configs/volc/joint_29d_insert_battery.8gpu.env`。  
+Close_Bottle_Cap_v2 K=100 delta：`configs/volc/joint_29d_close_bottle_cap_v2.k100.delta.8gpu.env`。  
 Close_Bottle_Cap_v2 K=50 delta：`configs/volc/joint_29d_close_bottle_cap_v2.k50.delta.8gpu.env`。  
 Close_Bottle_Cap_v2 K=50 absolute：`configs/volc/joint_29d_close_bottle_cap_v2.8gpu.env`。
 
@@ -514,8 +517,8 @@ Close_Bottle_Cap_v2 K=50 absolute：`configs/volc/joint_29d_close_bottle_cap_v2.
 若 `CONVERTED_BASE` 尚不存在，需先做受控转换与 parity（细节见验证清单 A.2）：
 
 ```bash
-python -m pi_dex.convert_pi05 ...   # 写出 model.safetensors
-python -m pi_dex.parity_pi05 ...    # JAX↔PT sample_actions 对比
+python -m pi_dex.weights.convert_pi05 ...   # 写出 model.safetensors
+python -m pi_dex.weights.parity_pi05 ...    # JAX↔PT sample_actions 对比
 ```
 
 训练侧只消费转换目录 + `--expected-base-sha256`；转换产物**不是**可部署 PI-DEX checkpoint（缺 Sharpa norm / `pi_dex.json`）。
@@ -548,10 +551,10 @@ python -m pi_dex.parity_pi05 ...    # JAX↔PT sample_actions 对比
 | `pi-dex-volc-train` / `scripts/volc_ddp_train.sh` | 火山 MLP → torchrun 训练 |
 | `scripts/volc_compute_norm.sh` | 火山 / 本机 compute-norm-stats（进程内多 CPU worker；见 [norm-compute.md](norm-compute.md)） |
 | `scripts/prepare_task_dataset.sh` / `pi-dex-prepare-dataset` | 任务数据 overlay + inventory + norm |
-| `pi-dex-realtime-infer` | 真机推理（非训练；见 realtime 模块） |
+| `pi-dex-realtime-infer` | 离线 convert/infer-once smoke |
 | `pi-dex-serve` / `scripts/serve_joint29d.sh` | joint_29d WebSocket model server |
 | `pi-dex-serve-probe` | 环回打一次 metadata + infer |
-| `pi-dex-robot-client` / `scripts/robot_client_joint29d.sh` | 从端 Zenoh 桥（配 start.sh + F6 推理） |
+| `pi-dex-robot-client` / `scripts/run_robot_joint29d.sh` | GPU 一键真机（serve+桥）；NUC 不跑 pi-dex |
 | `scripts/setup_inference_env.sh` | 推理机环境（详见 [inference-env.md](inference-env.md)） |
 | `scripts/export_inference_lock.sh` | 从当前开发 env 导出 pip-lock |
 | `configs/site/joint_29d_observation.reviewed.json` | 数据契约 |

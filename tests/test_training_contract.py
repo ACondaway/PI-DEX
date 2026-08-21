@@ -3,15 +3,16 @@ import types
 
 import pytest
 
-from pi_dex.spec import BimanualActionSpec
-from pi_dex.training_contract import openpi_model_contract_metadata
-from pi_dex.training_contract import training_contract_metadata
+from pi_dex.core.actions import MODEL_ACTION_DIM
+from pi_dex.core.spec import BimanualActionSpec
+from pi_dex.core.training_contract import openpi_model_contract_metadata
+from pi_dex.core.training_contract import training_contract_metadata
 
 
 def make_model_config() -> object:
     return types.SimpleNamespace(
         pi05=True,
-        action_dim=32,
+        action_dim=MODEL_ACTION_DIM,
         action_horizon=4,
         dtype="bfloat16",
         paligemma_variant="gemma_2b",
@@ -40,7 +41,7 @@ def test_openpi_model_contract_binds_tokenizer_variants_and_precision(
 
     assert contract == {
         "pi05": True,
-        "action_dim": 32,
+        "action_dim": MODEL_ACTION_DIM,
         "action_horizon": 4,
         "dtype": "bfloat16",
         "paligemma_variant": "gemma_2b",

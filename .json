@@ -1,0 +1,17 @@
+{
+  "mode": "train",
+  "run_dir": "/mnt/netdata/Team/Personal/congsheng/pi-dex-artifacts/runs",
+  "checkpoint_dir": "/mnt/netdata/Team/Personal/congsheng/pi-dex-artifacts/runs/1",
+  "global_step": 1,
+  "run_id": "cbc_k100_delta_bs16_smoke",
+  "loss_last": 0.630034863948822,
+  "world_size": 1,
+  "global_batch_size": 16,
+  "save_interval": 1,
+  "wandb": false,
+  "parent_base": {
+    "weights_file": "/mnt/netdata/Team/Personal/congsheng/pi-dex-artifacts/converted/pi05_base-pytorch-bfloat16-K8/model.safetensors",
+    "weights_sha256": "2f8539e2308611ea6fff84a5d7774f80d7c177c624769ff842008cf85dea9eeb",
+    "converted_base_dir": "/mnt/netdata/Team/Personal/congsheng/pi-dex-artifacts/converted/pi05_base-pytorch-bfloat16-K8"
+  }
+}

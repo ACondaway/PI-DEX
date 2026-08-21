@@ -1,17 +1,17 @@
 import numpy as np
 import pytest
 
-from pi_dex.actions import CARTESIAN_LOGICAL_ACTION_DIM
-from pi_dex.actions import JOINT_LOGICAL_ACTION_DIM
-from pi_dex.actions import LOGICAL_ACTION_DIM
-from pi_dex.actions import MODEL_ACTION_DIM
-from pi_dex.actions import VALID_ACTION_MASK
-from pi_dex.actions import ActionRepresentation
-from pi_dex.actions import deinterleave
-from pi_dex.actions import interleave
-from pi_dex.actions import pad_action
-from pi_dex.actions import unpad_action
-from pi_dex.actions import valid_action_mask
+from pi_dex.core.actions import CARTESIAN_LOGICAL_ACTION_DIM
+from pi_dex.core.actions import JOINT_LOGICAL_ACTION_DIM
+from pi_dex.core.actions import LOGICAL_ACTION_DIM
+from pi_dex.core.actions import MODEL_ACTION_DIM
+from pi_dex.core.actions import VALID_ACTION_MASK
+from pi_dex.core.actions import ActionRepresentation
+from pi_dex.core.actions import deinterleave
+from pi_dex.core.actions import interleave
+from pi_dex.core.actions import pad_action
+from pi_dex.core.actions import unpad_action
+from pi_dex.core.actions import valid_action_mask
 
 
 @pytest.mark.parametrize("representation", list(ActionRepresentation))
@@ -89,7 +89,7 @@ def test_valid_action_mask_excludes_representation_padding(representation: Actio
 
 def test_representation_widths_are_stable() -> None:
     assert ActionRepresentation.CARTESIAN_31D.logical_action_dim == CARTESIAN_LOGICAL_ACTION_DIM == 31
-    assert ActionRepresentation.JOINT_29D.logical_action_dim == JOINT_LOGICAL_ACTION_DIM == 29
+    assert ActionRepresentation.JOINT_29D.logical_action_dim == JOINT_LOGICAL_ACTION_DIM == 36
 
 
 def test_valid_action_mask_rejects_untyped_representation() -> None:
@@ -188,16 +188,17 @@ def test_interleave_requires_finite_values_and_neutral_padding(
 ) -> None:
     left_actions = np.zeros((2, MODEL_ACTION_DIM), dtype=np.float32)
     right_actions = np.zeros_like(left_actions)
-    left_actions[0, representation.logical_action_dim] = 1.0
+    if representation.logical_action_dim < MODEL_ACTION_DIM:
+        left_actions[0, representation.logical_action_dim] = 1.0
+        with pytest.raises(ValueError, match=r"padding dimensions.*zero"):
+            interleave(
+                left_actions,
+                right_actions,
+                representation=representation,
+            )
+        left_actions[0, representation.logical_action_dim] = 0.0
 
-    with pytest.raises(ValueError, match=r"padding dimensions.*zero"):
-        interleave(
-            left_actions,
-            right_actions,
-            representation=representation,
-        )
-
-    left_actions[0, representation.logical_action_dim] = np.nan
+    left_actions[0, 0] = np.nan
     with pytest.raises(ValueError, match=r"model action values.*finite"):
         interleave(
             left_actions,

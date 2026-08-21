@@ -13,6 +13,17 @@ PI-DEX 是面向 Sharpa North 双手灵巧操作的研究代码，基于 OpenPI 
 
 当前已经实现：
 
+源码按职责分包（`src/pi_dex/`）：
+
+| 包 | 内容 |
+|----|------|
+| `core` | action / spec / normalization / training_contract |
+| `data` | observation contract、Sharpa HDF5、episode split、norm compute |
+| `training` | OpenPI 训练、checkpoints、DDP / Volcano launcher |
+| `weights` | π0.5 convert / parity |
+| `serve` | WebSocket policy server、deployment wire |
+| `robot` | 真机 OpenPI Runtime + harobotsDL NorthZmqEnv |
+
 - 两种显式单手动作表示及其统一 32D OpenPI 编解码：`cartesian_31d` 补 1 维，
   `joint_29d` 补 3 维，并按 `L, R` 双手交错/解交错；
 - 显式的 horizon、时间基准、坐标系、动作模式、rotation-6D、手臂/手部关节顺序与镜像映射、标定版本和延迟契约；
@@ -24,14 +35,14 @@ PI-DEX 是面向 Sharpa North 双手灵巧操作的研究代码，基于 OpenPI 
 - 保持 OpenPI 原始 `PI0Pytorch` 与 checkpoint shape 不变的 padding-neutral 训练核心；
 - `pi-dex-train-pytorch` 动作表示选择与外部 `module:callable` runner 接缝；
 - first-party Sharpa `joint_29d` HDF5 dataset（JPEG EOI、state、双手 `[K,29]` actions）与
-  `pi_dex.training_runner`（validate-data / compute-norm-stats / train / synthetic-smoke）；
+  `pi_dex.training.training_runner`（validate-data / compute-norm-stats / train / synthetic-smoke）；
 - 多节点 DDP（``DistributedSampler``、rank-0 checkpoint）与火山引擎入口
   （``pi-dex-volc-train`` / ``scripts/volc_ddp_train.sh``）；
-- 真机推理适配（``pi-dex-realtime-infer``：SDK observation → policy → NorthDirect action dict）；
-- WebSocket model server（``pi-dex-serve``：GPU 侧收 obs / 回 action；机侧保留 Zenoh）；
-- 从端 Zenoh 桥（``pi-dex-robot-client``：配 ``start.sh`` + F6 推理，订阅
-  ``north_observation``、发布 ``inference/action``）；
-- 受控 convert wrapper（`python -m pi_dex.convert_pi05`）、strict weight load
+- 真机推理（``pi-dex-robot-client``：OpenPI ``Runtime`` + ``ActionChunkBroker`` +
+  harobotsDL ``NorthZmqEnv``；订阅 ``north_observation``、发布 ``inference/action``）；
+- WebSocket model server（``pi-dex-serve``：GPU 侧收 obs / 回 action）；
+- 离线 convert/infer smoke（``pi-dex-realtime-infer``）；
+- 受控 convert wrapper（`python -m pi_dex.weights.convert_pi05`）、strict weight load
   （`load_verified_pi05_base`）与最小训练 checkpoint manager；
 - checkpoint 对 action、OpenPI 模型/tokenizer 配置、真实权重文件与 normalization asset 的指纹绑定，以及 PyTorch policy 加载；其中 tokenizer 仅绑定配置，实际 model 文件字节仍属下述外部边界；
 - 只发布已反归一化物理动作的服务 adapter；

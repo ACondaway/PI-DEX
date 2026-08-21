@@ -2,8 +2,8 @@
 
 import dataclasses
 
-from pi_dex.actions import ActionRepresentation
-from pi_dex.spec import BimanualActionSpec
+from pi_dex.core.actions import ActionRepresentation
+from pi_dex.core.spec import BimanualActionSpec
 
 
 def spec_for_representation(

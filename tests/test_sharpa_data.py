@@ -3,21 +3,24 @@ import dataclasses
 import numpy as np
 import pytest
 
-from pi_dex.actions import HAND_JOINT_DIM
-from pi_dex.actions import LOGICAL_ACTION_DIM
-from pi_dex.actions import ActionRepresentation
-from pi_dex.sharpa_data import ARM_JOINT_DIM
-from pi_dex.sharpa_data import AlignedTimeline
-from pi_dex.sharpa_data import CommandedJointGroup
-from pi_dex.sharpa_data import EpisodeActionProvenance
-from pi_dex.sharpa_data import HandSide
-from pi_dex.sharpa_data import derive_bimanual_logical_action_chunk
-from pi_dex.sharpa_data import derive_joint_actions
-from pi_dex.sharpa_data import derive_logical_actions
-from pi_dex.sharpa_data import select_commanded_joint_horizon
-from pi_dex.spec import ActionMode
-from pi_dex.spec import ActionTimebase
-from pi_dex.spec import BimanualActionSpec
+from pi_dex.core.actions import HAND_JOINT_DIM
+from pi_dex.core.actions import JOINT_ARM_HAND_DIM
+from pi_dex.core.actions import LOGICAL_ACTION_DIM
+from pi_dex.core.actions import ActionRepresentation
+from pi_dex.data.sharpa_data import ARM_JOINT_DIM
+from pi_dex.data.sharpa_data import AlignedTimeline
+from pi_dex.data.sharpa_data import CommandedJointGroup
+from pi_dex.data.sharpa_data import EpisodeActionProvenance
+from pi_dex.data.sharpa_data import HandSide
+from pi_dex.data.sharpa_data import MOTOR_JOINT_DIM
+from pi_dex.data.sharpa_data import MOTOR_JOINT_ORDER
+from pi_dex.data.sharpa_data import derive_bimanual_logical_action_chunk
+from pi_dex.data.sharpa_data import derive_joint_actions
+from pi_dex.data.sharpa_data import derive_logical_actions
+from pi_dex.data.sharpa_data import select_commanded_joint_horizon
+from pi_dex.core.spec import ActionMode
+from pi_dex.core.spec import ActionTimebase
+from pi_dex.core.spec import BimanualActionSpec
 from tests.helpers import spec_for_representation
 
 BASE_TIME_S = 1_800_000_000.0
@@ -71,11 +74,16 @@ def make_group(
     time_origin_s: float = BASE_TIME_S,
     timestamp_offset_s: float = 0.0,
 ) -> CommandedJointGroup:
-    width = ARM_JOINT_DIM if "_arm/" in field_name else HAND_JOINT_DIM
-    side = "left" if "left_" in field_name else "right"
-    part = "arm" if "_arm/" in field_name else "hand"
-    if joint_order is None:
-        joint_order = tuple(f"{side}_{part}_j{index}" for index in range(width))
+    if field_name == "action/motor/joint_angle":
+        width = MOTOR_JOINT_DIM
+        if joint_order is None:
+            joint_order = MOTOR_JOINT_ORDER
+    else:
+        width = ARM_JOINT_DIM if "_arm/" in field_name else HAND_JOINT_DIM
+        side = "left" if "left_" in field_name else "right"
+        part = "arm" if "_arm/" in field_name else "hand"
+        if joint_order is None:
+            joint_order = tuple(f"{side}_{part}_j{index}" for index in range(width))
     values = np.linspace(-0.5, 0.5, raw_length * width, dtype=np.float32).reshape(raw_length, width)
     timestamps = time_origin_s + np.arange(raw_length, dtype=np.float64) * RAW_PERIOD_S
     timestamps += timestamp_offset_s
@@ -108,6 +116,11 @@ def make_groups() -> tuple[CommandedJointGroup, ...]:
             time_origin_s=shifted_origin,
             timestamp_offset_s=0.0006,
         ),
+        make_group(
+            "action/motor/joint_angle",
+            aligned_index=default_index,
+            timestamp_offset_s=0.0008,
+        ),
     )
 
 
@@ -119,7 +132,7 @@ def derive_chunk(
     provenance: EpisodeActionProvenance | None = None,
     kinematics: object = _DEFAULT_KINEMATICS,
 ):
-    left_arm, left_hand, right_arm, right_hand = groups
+    left_arm, left_hand, right_arm, right_hand, motor = groups
     if kinematics is _DEFAULT_KINEMATICS:
         kinematics = (
             FakeKinematics()
@@ -133,6 +146,7 @@ def derive_chunk(
         left_hand=left_hand,
         right_arm=right_arm,
         right_hand=right_hand,
+        motor=motor,
         start_aligned_frame=np.int32(1),
         spec=action_spec,
         kinematics=kinematics,
@@ -277,7 +291,7 @@ def test_derive_bimanual_chunk_uses_each_groups_own_alignment(action_spec: Biman
 
     chunk = derive_chunk(action_spec, groups)
 
-    left_arm, left_hand, right_arm, right_hand = groups
+    left_arm, left_hand, right_arm, right_hand, _motor = groups
     assert chunk.left_actions.shape == (2, LOGICAL_ACTION_DIM)
     assert chunk.right_actions.shape == (2, LOGICAL_ACTION_DIM)
     assert chunk.left_actions.dtype == np.float32
@@ -305,13 +319,13 @@ def test_joint_chunk_preserves_selected_commanded_arm_then_hand_columns(
 
     chunk = derive_chunk(joint_spec, groups)
 
-    left_arm, left_hand, right_arm, right_hand = groups
+    left_arm, left_hand, right_arm, right_hand, motor = groups
     expected_left = np.concatenate(
-        (left_arm.joint_angles[[2, 3]], left_hand.joint_angles[[3, 4]]),
+        (left_arm.joint_angles[[2, 3]], left_hand.joint_angles[[3, 4]], motor.joint_angles[[2, 3]]),
         axis=-1,
     )
     expected_right = np.concatenate(
-        (right_arm.joint_angles[[2, 3]], right_hand.joint_angles[[3, 4]]),
+        (right_arm.joint_angles[[2, 3]], right_hand.joint_angles[[3, 4]], motor.joint_angles[[2, 3]]),
         axis=-1,
     )
     assert chunk.left_actions.shape == (
@@ -359,18 +373,18 @@ def test_derive_aligned_joint_chunk_uses_each_groups_recorded_indices(
 
     chunk = derive_chunk(joint_spec, groups, timeline=timeline)
 
-    left_arm, left_hand, right_arm, right_hand = groups
+    left_arm, left_hand, right_arm, right_hand, motor = groups
     np.testing.assert_array_equal(
         chunk.left_actions,
         np.concatenate(
-            (left_arm.joint_angles[[2, 4]], left_hand.joint_angles[[3, 5]]),
+            (left_arm.joint_angles[[2, 4]], left_hand.joint_angles[[3, 5]], motor.joint_angles[[2, 4]]),
             axis=-1,
         ),
     )
     np.testing.assert_array_equal(
         chunk.right_actions,
         np.concatenate(
-            (right_arm.joint_angles[[2, 4]], right_hand.joint_angles[[3, 5]]),
+            (right_arm.joint_angles[[2, 4]], right_hand.joint_angles[[3, 5]], motor.joint_angles[[2, 4]]),
             axis=-1,
         ),
     )
@@ -389,7 +403,7 @@ def test_cartesian_chunk_requires_fk_and_joint_chunk_forbids_it(
 
 
 def test_derive_chunk_rejects_cross_group_timestamp_skew(action_spec: BimanualActionSpec) -> None:
-    left_arm, left_hand, right_arm, _ = make_groups()
+    left_arm, left_hand, right_arm, _, motor = make_groups()
     right_hand = make_group(
         "action/right_hand/joint_angle",
         aligned_index=np.array([1, 3, 5], dtype=np.int32),
@@ -398,7 +412,7 @@ def test_derive_chunk_rejects_cross_group_timestamp_skew(action_spec: BimanualAc
     )
 
     with pytest.raises(ValueError, match="timestamp skew"):
-        derive_chunk(action_spec, (left_arm, left_hand, right_arm, right_hand))
+        derive_chunk(action_spec, (left_arm, left_hand, right_arm, right_hand, motor))
 
 
 def test_derive_chunk_rejects_synchronized_commands_offset_from_camera(
@@ -432,8 +446,8 @@ def test_joint29d_contract_accepts_one_skipped_raw_tick() -> None:
     """Insert_Battery / OpenData routinely skip one 59.4 Hz tick (~16.835 ms)."""
     from pathlib import Path
 
-    from pi_dex.observation_contract import load_observation_contract
-    from pi_dex.training_runner import build_joint_spec_from_contract
+    from pi_dex.data.observation_contract import load_observation_contract
+    from pi_dex.training.training_runner import build_joint_spec_from_contract
 
     contract = load_observation_contract(
         Path(__file__).resolve().parents[1] / "configs/site/joint_29d_observation.unreviewed.json"
@@ -467,10 +481,10 @@ def test_joint29d_contract_accepts_one_skipped_raw_tick() -> None:
 
 
 def test_derive_chunk_rejects_group_with_wrong_role(action_spec: BimanualActionSpec) -> None:
-    left_arm, left_hand, right_arm, right_hand = make_groups()
+    left_arm, left_hand, right_arm, right_hand, motor = make_groups()
 
     with pytest.raises(ValueError, match=r"group role.*left_arm"):
-        derive_chunk(action_spec, (right_arm, left_hand, left_arm, right_hand))
+        derive_chunk(action_spec, (right_arm, left_hand, left_arm, right_hand, motor))
 
 
 @pytest.mark.parametrize(
@@ -482,11 +496,11 @@ def test_derive_chunk_rejects_hand_columns_out_of_spec_order_in_both_representat
     action_representation: ActionRepresentation,
 ) -> None:
     representation_spec = spec_for_representation(action_spec, action_representation)
-    left_arm, left_hand, right_arm, right_hand = make_groups()
+    left_arm, left_hand, right_arm, right_hand, motor = make_groups()
     left_hand = dataclasses.replace(left_hand, joint_order=tuple(reversed(left_hand.joint_order)))
 
     with pytest.raises(ValueError, match=r"left_hand.*joint_order"):
-        derive_chunk(representation_spec, (left_arm, left_hand, right_arm, right_hand))
+        derive_chunk(representation_spec, (left_arm, left_hand, right_arm, right_hand, motor))
 
 
 @pytest.mark.parametrize(
@@ -508,14 +522,14 @@ def test_derive_chunk_rejects_wrong_hand_mapping_provenance_in_both_representati
 
 
 def test_derive_chunk_rejects_group_n_different_from_canonical(action_spec: BimanualActionSpec) -> None:
-    left_arm, left_hand, right_arm, right_hand = make_groups()
+    left_arm, left_hand, right_arm, right_hand, motor = make_groups()
     left_arm = make_group(
         "action/left_arm/joint_angle",
         aligned_index=np.array([0, 2], dtype=np.int32),
     )
 
     with pytest.raises(ValueError, match="canonical N=3"):
-        derive_chunk(action_spec, (left_arm, left_hand, right_arm, right_hand))
+        derive_chunk(action_spec, (left_arm, left_hand, right_arm, right_hand, motor))
 
 
 @pytest.mark.parametrize("start_aligned_frame", [-1, 3])
@@ -575,7 +589,10 @@ def test_joint_chunk_accepts_delta_spec_for_absolute_hdf5_commands(action_spec: 
     )
 
     chunk = derive_chunk(joint_delta_spec, make_groups())
-    assert chunk.left_actions.shape == (joint_delta_spec.physical_horizon, 29)
+    assert chunk.left_actions.shape == (
+        joint_delta_spec.physical_horizon,
+        joint_delta_spec.logical_action_dim,
+    )
 
 
 def test_direct_joint_actions_preserve_declared_column_order(
@@ -603,7 +620,7 @@ def test_direct_joint_actions_preserve_declared_column_order(
 
     assert actions.shape == (
         joint_spec.physical_horizon,
-        joint_spec.logical_action_dim,
+        JOINT_ARM_HAND_DIM,
     )
     assert actions.dtype == np.float32
     np.testing.assert_array_equal(actions[:, :ARM_JOINT_DIM], arm)

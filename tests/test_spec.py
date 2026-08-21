@@ -4,12 +4,12 @@ import types
 
 import pytest
 
-from pi_dex.actions import MODEL_ACTION_DIM
-from pi_dex.actions import ActionRepresentation
-from pi_dex.actions import valid_action_mask
-from pi_dex.spec import ACTION_LAYOUT_VERSION
-from pi_dex.spec import ACTION_METADATA_SCHEMA_VERSION
-from pi_dex.spec import BimanualActionSpec
+from pi_dex.core.actions import MODEL_ACTION_DIM
+from pi_dex.core.actions import ActionRepresentation
+from pi_dex.core.actions import valid_action_mask
+from pi_dex.core.spec import ACTION_LAYOUT_VERSION
+from pi_dex.core.spec import ACTION_METADATA_SCHEMA_VERSION
+from pi_dex.core.spec import BimanualActionSpec
 from tests.helpers import spec_for_representation
 
 
@@ -34,7 +34,7 @@ def test_spec_derives_representation_contract(
 
 
 def test_spec_validates_matching_pi05_config(action_spec: BimanualActionSpec) -> None:
-    model_config = types.SimpleNamespace(pi05=True, action_dim=32, action_horizon=4)
+    model_config = types.SimpleNamespace(pi05=True, action_dim=MODEL_ACTION_DIM, action_horizon=4)
 
     action_spec.validate_openpi_model_config(model_config)
 
@@ -43,7 +43,7 @@ def test_spec_validates_matching_pi05_config(action_spec: BimanualActionSpec) ->
     ("field_name", "value"),
     [
         ("pi05", 1),
-        ("action_dim", 32.0),
+        ("action_dim", float(MODEL_ACTION_DIM)),
         ("action_dim", True),
         ("action_horizon", 4.0),
         ("action_horizon", True),
@@ -54,7 +54,7 @@ def test_spec_rejects_model_config_with_equal_but_wrong_type(
     field_name: str,
     value: object,
 ) -> None:
-    config_values = {"pi05": True, "action_dim": 32, "action_horizon": 4}
+    config_values = {"pi05": True, "action_dim": MODEL_ACTION_DIM, "action_horizon": 4}
     config_values[field_name] = value
 
     with pytest.raises(TypeError, match=field_name):
@@ -74,7 +74,7 @@ def test_spec_rejects_incompatible_model_config(
     field_name: str,
     value: object,
 ) -> None:
-    config_values = {"pi05": True, "action_dim": 32, "action_horizon": 4}
+    config_values = {"pi05": True, "action_dim": MODEL_ACTION_DIM, "action_horizon": 4}
     config_values[field_name] = value
 
     with pytest.raises(ValueError, match=field_name):
@@ -100,11 +100,12 @@ def test_joint_spec_metadata_records_29d_joint_layout(action_spec: BimanualActio
     metadata = {"pi_dex": joint_spec.to_metadata()}
 
     joint_spec.validate_metadata(metadata)
-    assert metadata["pi_dex"]["layout_version"] == 3
-    assert metadata["pi_dex"]["metadata_schema_version"] == 3
+    assert metadata["pi_dex"]["layout_version"] == ACTION_LAYOUT_VERSION
+    assert metadata["pi_dex"]["metadata_schema_version"] == ACTION_METADATA_SCHEMA_VERSION
     assert metadata["pi_dex"]["action_representation"] == "joint_29d"
-    assert metadata["pi_dex"]["logical_action_dim"] == 29
-    assert metadata["pi_dex"]["model_action_dim"] == 32
+    assert metadata["pi_dex"]["logical_action_dim"] == 36
+    assert metadata["pi_dex"]["model_action_dim"] == MODEL_ACTION_DIM
+    assert metadata["pi_dex"]["joint_includes_duplicated_motor"] is True
     assert metadata["pi_dex"]["arm_joint_unit"] == "rad"
     assert metadata["pi_dex"]["coordinate_frame"] is None
     assert metadata["pi_dex"]["rotation_6d_convention"] is None
@@ -183,7 +184,7 @@ def test_spec_public_boundaries_revalidate_bypassed_frozen_fields(
 ) -> None:
     invalid_spec = dataclasses.replace(action_spec)
     object.__setattr__(invalid_spec, "physical_horizon", 0)
-    model_config = types.SimpleNamespace(pi05=True, action_dim=32, action_horizon=0)
+    model_config = types.SimpleNamespace(pi05=True, action_dim=MODEL_ACTION_DIM, action_horizon=0)
 
     with pytest.raises(ValueError, match="physical_horizon"):
         invalid_spec.validate_openpi_model_config(model_config)

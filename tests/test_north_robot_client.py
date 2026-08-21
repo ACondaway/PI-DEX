@@ -9,20 +9,20 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from pi_dex.north_codec import build_synthetic_north_observation
-from pi_dex.north_codec import encode_uhr_action_bundle
-from pi_dex.north_codec import north_observation_to_sdk_dict
-from pi_dex.north_codec import parse_north_observation
-from pi_dex.north_codec import sdk_action_chunk_to_step_dicts
-from pi_dex.north_codec import sdk_step_action_to_uhr_bundle
-from pi_dex.observation_contract import load_observation_contract
-from pi_dex.realtime_actions import JOINT_29D_DIM
-from pi_dex.realtime_actions import policy_result_to_sdk_action_dict
-from pi_dex.realtime_observation import build_policy_observation_from_sdk
-from pi_dex.realtime_observation import resolve_live_prompt
-from pi_dex.realtime_observation import resolve_observation_timestamp_ns
-from pi_dex.robot_client import main as robot_client_main
-from pi_dex.training_runner import build_joint_spec_from_contract
+from pi_dex.robot.north_codec import build_synthetic_north_observation
+from pi_dex.robot.north_codec import encode_uhr_action_bundle
+from pi_dex.robot.north_codec import north_observation_to_sdk_dict
+from pi_dex.robot.north_codec import parse_north_observation
+from pi_dex.robot.north_codec import sdk_action_chunk_to_step_dicts
+from pi_dex.robot.north_codec import sdk_step_action_to_uhr_bundle
+from pi_dex.data.observation_contract import load_observation_contract
+from pi_dex.robot.realtime_actions import JOINT_29D_DIM
+from pi_dex.robot.realtime_actions import policy_result_to_sdk_action_dict
+from pi_dex.robot.realtime_observation import build_policy_observation_from_sdk
+from pi_dex.robot.realtime_observation import resolve_live_prompt
+from pi_dex.robot.realtime_observation import resolve_observation_timestamp_ns
+from pi_dex.robot.main import main as robot_client_main
+from pi_dex.training.training_runner import build_joint_spec_from_contract
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -79,7 +79,7 @@ def test_sdk_action_chunk_to_uhr_bundle() -> None:
     raw = encode_uhr_action_bundle(bundle)
     assert isinstance(raw, (bytes, bytearray)) and len(raw) > 0
     assert list(bundle.left_arm.joint.position) == pytest.approx(list(left[0, :7]))
-    assert list(bundle.left_glove.joint.position) == pytest.approx(list(left[0, 7:]))
+    assert list(bundle.left_glove.joint.position) == pytest.approx(list(left[0, 7:29]))
     assert bundle.language == "hi"
 
 

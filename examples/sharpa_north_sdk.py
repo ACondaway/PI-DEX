@@ -5,9 +5,9 @@ It is not importable as a first-party package module: it depends on sibling
 ``.base`` / ``.builder`` / ``.proto`` from the vendor tree.
 
 Observation and action key identity used by PI-DEX lives in
-``pi_dex.sharpa_runtime_keys``. A future ``BimanualController`` adapter must
+``pi_dex.robot.sharpa_runtime_keys``. A future ``BimanualController`` adapter must
 implement atomic bimanual apply/hold/lease semantics from
-``pi_dex.deployment``; the paced ``_action_sender_loop`` below is not that
+``pi_dex.serve.deployment``; the paced ``_action_sender_loop`` below is not that
 protocol.
 """
 

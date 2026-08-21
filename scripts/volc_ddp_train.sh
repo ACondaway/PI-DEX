@@ -9,7 +9,7 @@
 #   1) activates the pi-dex conda env
 #   2) exports OPENPI_DATA_HOME / artifact paths
 #   3) validates WANDB_API_KEY when wandb is on
-#   4) launches torchrun via pi_dex.volc_launch
+#   4) launches torchrun via pi_dex.training.volc_launch
 #
 # Recommended MLP "自定义启动命令" (1 node × 8 GPU):
 #   bash /mnt/netdata/Team/Personal/congsheng/PI-DEX/scripts/volc_ddp_train.sh
@@ -17,7 +17,7 @@
 # Or with explicit overrides:
 #   bash scripts/volc_ddp_train.sh -- \
 #     --action-representation joint_29d \
-#     --runner pi_dex.training_runner:run -- \
+#     --runner pi_dex.training.training_runner:run -- \
 #     --mode train ...
 #
 # Dry-run (print torchrun only):
@@ -157,7 +157,7 @@ if [[ ${#USER_ARGS[@]} -eq 0 ]]; then
 
   TRAIN_ARGS=(
     --action-representation joint_29d
-    --runner pi_dex.training_runner:run
+    --runner pi_dex.training.training_runner:run
     --
     --mode train
     --observation-contract "${CONTRACT}"
@@ -226,4 +226,4 @@ if [[ "${VOLC_DRY_RUN}" == "1" ]]; then
 fi
 
 # Prefer env python module entry so we never pick a system python.
-exec "${PYTHON_BIN}" -m pi_dex.volc_launch "${DRY_FLAG[@]}" -- "${TRAIN_ARGS[@]}"
+exec "${PYTHON_BIN}" -m pi_dex.training.volc_launch "${DRY_FLAG[@]}" -- "${TRAIN_ARGS[@]}"

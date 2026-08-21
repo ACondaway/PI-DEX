@@ -7,11 +7,11 @@ from typing import Any
 
 import pytest
 
-from pi_dex.wandb_run import finish_train_wandb
-from pi_dex.wandb_run import init_train_wandb
-from pi_dex.wandb_run import log_train_metrics
-from pi_dex.wandb_run import require_wandb_api_key
-from pi_dex.wandb_run import should_save_checkpoint
+from pi_dex.training.wandb_run import finish_train_wandb
+from pi_dex.training.wandb_run import init_train_wandb
+from pi_dex.training.wandb_run import log_train_metrics
+from pi_dex.training.wandb_run import require_wandb_api_key
+from pi_dex.training.wandb_run import should_save_checkpoint
 
 
 def test_should_save_checkpoint_interval_and_final() -> None:

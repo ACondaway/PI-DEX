@@ -9,12 +9,12 @@ loss、归一化资产、checkpoint 契约、安全 dispatch 和一个外部 tra
 训练、checkpoint、策略服务和机器人进程必须共享同一个 `BimanualActionSpec`。下面的标识仅用于展示接口；接入真实数据前必须替换为经过验证的机器人、标定、时钟和控制语义。
 
 ```python
-from pi_dex.actions import ActionRepresentation
-from pi_dex.spec import ActionMode
-from pi_dex.spec import ActionTimebase
-from pi_dex.spec import BimanualActionSpec
-from pi_dex.spec import HandNormalization
-from pi_dex.spec import Rotation6DConvention
+from pi_dex.core.actions import ActionRepresentation
+from pi_dex.core.spec import ActionMode
+from pi_dex.core.spec import ActionTimebase
+from pi_dex.core.spec import BimanualActionSpec
+from pi_dex.core.spec import HandNormalization
+from pi_dex.core.spec import Rotation6DConvention
 
 action_representation = ActionRepresentation.CARTESIAN_31D
 uses_cartesian_actions = action_representation is ActionRepresentation.CARTESIAN_31D
@@ -94,7 +94,7 @@ metadata/checkpoint/wire 不含完整的表示选择，必须双向 fail closed�
   不得为了接口统一而创建或调用 FK。
 
 ```python
-from pi_dex.sharpa_data import derive_bimanual_logical_action_chunk
+from pi_dex.data.sharpa_data import derive_bimanual_logical_action_chunk
 
 chunk = derive_bimanual_logical_action_chunk(
     aligned_timeline=canonical_head_camera_timeline,
@@ -151,9 +151,9 @@ worker seed、异常清理并通过测试后，才能提高该值。不得让父
 import dataclasses
 
 from openpi.shared import normalize
-from pi_dex.openpi_integration import compute_bimanual_normalization_stats
-from pi_dex.openpi_integration import configure_bimanual_train_config
-from pi_dex.openpi_integration import create_pi05_model_config
+from pi_dex.training.openpi_integration import compute_bimanual_normalization_stats
+from pi_dex.training.openpi_integration import configure_bimanual_train_config
+from pi_dex.training.openpi_integration import create_pi05_model_config
 
 # base_train_config 必须由 Sharpa 接入层提供 DataConfigFactory、asset_id、
 # checkpoint/assets 路径和图像/state/prompt transforms。
@@ -181,7 +181,7 @@ data_config = dataclasses.replace(data_config, norm_stats=norm_stats)
 标准 OpenPI LeRobot loader 会把 `action_horizon=2K` 解释为 `2K` 个连续物理时刻，因此 PI-DEX 必须传入已经按 `K` 取窗的自有 dataset：
 
 ```python
-from pi_dex.openpi_integration import create_pytorch_data_loader_from_dataset
+from pi_dex.training.openpi_integration import create_pytorch_data_loader_from_dataset
 
 loader = create_pytorch_data_loader_from_dataset(
     dataset,
@@ -310,7 +310,7 @@ import jax
 import torch
 
 from openpi.models_pytorch.pi0_pytorch import PI0Pytorch
-from pi_dex.pytorch_training import PiDexPytorchTrainer
+from pi_dex.training.pytorch_training import PiDexPytorchTrainer
 
 device = torch.device(device_name_from_runtime_config)
 model = PI0Pytorch(train_config.model).to(device)
@@ -399,8 +399,8 @@ checkpoint 和部署共同使用的 spec 传给 `spec = context.bind_action_spec
 ```python
 from openpi.shared import normalize
 from openpi.training import checkpoints as openpi_checkpoints
-from pi_dex.checkpoints import load_and_validate_training_contract
-from pi_dex.checkpoints import save_training_contract
+from pi_dex.training.checkpoints import load_and_validate_training_contract
+from pi_dex.training.checkpoints import save_training_contract
 
 # 必须先在同一个待原子发布的目录中保存真实权重和 stats：
 # temporary_checkpoint_dir/model.safetensors
@@ -488,38 +488,55 @@ clock_domain
 pi-dex-serve-probe --host 127.0.0.1 --port 8000 --api-key "$API_KEY"
 ```
 
-### 6.1.1 从端推理桥（Zenoh ↔ serve）
+### 6.1.1 推理桥（GPU 机：Zenoh ↔ 本机 serve）
 
 机器人侧已有 Sharpa 启动脚本（NUC `start.sh` / `start-nuc.sh` + Orin
-`start-remote-orin.sh`），pendant **F6** 切遥操作↔推理、**F2** 走
-init→standby↔moving。PI-DEX **不替代**这些进程；缺的是推理模式下向
-`inference/action` 发布 `UhrActionBundle` 的策略桥。
+`start-remote-orin.sh`），pendant **F6** / **F2**。PI-DEX **不替代**这些进程，
+也**不在从端跑任何 `pi-dex-*`**。策略桥与 model server 都在 GPU 机。
 
 推荐拓扑：
 
 | 机器 | 进程 |
 |------|------|
-| 从端 NUC (+ Orin) | `bash start.sh`（或拆开的 nuc/orin 脚本） |
-| GPU 机 | `pi-dex-serve` / `scripts/serve_joint29d.sh` |
-| 从端 NUC（同 Zenoh 域） | `pi-dex-robot-client` / `scripts/robot_client_joint29d.sh` |
+| 从端 NUC (+ Orin) | 仅 `bash start.sh`（Zenoh 机器人域） |
+| GPU 机 | `pi-dex-serve` + `pi-dex-robot-client`（本机 WS + 跨机 Zenoh） |
 
 ```bash
 # 离线确认 protobuf→SDK→OpenPI 观测（无需 Zenoh / GPU）
 pi-dex-robot-client --mode codec-smoke
 
-# 真机：先拉起机器人栈与 model server，再起桥
+# GPU 机一键（serve + 桥）：
+bash scripts/run_robot_joint29d.sh \
+  --checkpoint-dir /path/to/ckpt \
+  --assets-dir /path/to/assets \
+  --asset-id sharpa_joint_29d_insert_battery_k50_delta \
+  --contract configs/site/joint_29d_observation.k50.reviewed.json \
+  --action-mode delta \
+  --output-chunk 50 \
+  --offset 6 \
+  --prompt "insert the battery"
+
+# 或分两步：先 serve，再桥（serve-host 用本机）
+bash scripts/serve_joint29d.sh ... --host 127.0.0.1 --port 8000 --action-mode delta
+
 bash scripts/robot_client_joint29d.sh \
-  --serve-host <GPU_IP> \
+  --serve-host 127.0.0.1 \
   --serve-port 8000 \
+  --action-mode delta \
+  --output-chunk 50 \
+  --offset 6 \
   --prompt "insert the battery"
 
 # pendant: F6 → 推理模式，F2 → moving
 ```
 
-默认 topic 与参考 SDK（`examples/sharpa_north_sdk.py`）一致：
-`north_observation` → `inference/action`。编解码见 `pi_dex.north_codec`
-（schema：`examples/north.proto`，生成码：`pi_dex.north_pb2`）。NUC 需安装
-`eclipse-zenoh`；lease / e-stop / watchdog 仍属后续 `BimanualController`。
+实现位置：`pi_dex.robot`：
+
+- 控制环：stock OpenPI `Runtime` / `PolicyAgent` / `ActionChunkBroker`（`max_hz ≈ 1/action_pub_duration`）
+- I/O：`NorthZmqEnv`（经网络加入机器人 Zenoh 域；必要时 `--zenoh-config`）
+- 远端策略：`WebsocketJointPolicy` → 本机 `pi-dex-serve`
+
+默认 topic：`north_observation` → `inference/action`。编解码见 `pi_dex.robot.north_codec`。
 
 推理机 / 从端环境安装与联调步骤见专文 [inference-env.md](inference-env.md)。
 
@@ -536,7 +553,7 @@ controller watchdog 在推理线程阻塞或连接半开时限时进入安全态
 
 ```python
 from openpi.serving.websocket_policy_server import WebsocketPolicyServer
-from pi_dex.openpi_integration import create_bimanual_trained_policy
+from pi_dex.training.openpi_integration import create_bimanual_trained_policy
 
 policy = create_bimanual_trained_policy(
     # 必须是第 3 节由 configure_bimanual_train_config 返回的同一语义配置。
@@ -577,9 +594,9 @@ session_id          32 lowercase hexadecimal digits, adapter instance scope
 客户端启动时先验证完整 metadata，并从服务端声明的 execution horizon 构造 broker：
 
 ```python
-from pi_dex.deployment import BimanualActionChunkBroker
-from pi_dex.deployment import BimanualCommandDispatcher
-from pi_dex.deployment import BimanualSafetyLimits
+from pi_dex.serve.deployment import BimanualActionChunkBroker
+from pi_dex.serve.deployment import BimanualCommandDispatcher
+from pi_dex.serve.deployment import BimanualSafetyLimits
 
 server_metadata = client.get_server_metadata()
 broker = BimanualActionChunkBroker.from_metadata(

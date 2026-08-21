@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "contract_id": "sharpa_north_joint_29d_observation_k100_v0",
+  "review_status": "reviewed",
+  "reviewed_by": "congsheng",
+  "review_notes": "K=100 training variant of sharpa_north_joint_29d_observation_v0 (2026-08-20). Same cameras, 65D state, prompts, 20 ms cadence tolerances, and episode_hash_stratified_by_task splits as the K=8/K=50 reviewed contracts. physical_horizon=100 (~1.68 s at 59.4 Hz); model action_horizon=2K=200. K=8 jobs keep joint_29d_observation.reviewed.json; K=50 jobs keep joint_29d_observation.k50.reviewed.json. Converted pi05_base weights are horizon-independent (action_dim=32) and may be reused from the K8 converted directory.",
+  "action_representation": "joint_29d",
+  "physical_horizon": 100,
+  "timebase": "raw_control_60_hz",
+  "control_frequency_hz": 59.4,
+  "max_group_timestamp_skew_ms": 20.0,
+  "max_alignment_timestamp_error_ms": 20.0,
+  "max_control_period_error_ms": 20.0,
+  "episode_tail_policy": "reject_incomplete_horizon",
+  "state_columns": [
+    {
+      "source_path": "state/left_arm/joint_angle",
+      "slice_start": 0,
+      "slice_stop": 7,
+      "unit": "rad",
+      "semantics": "absolute_measured"
+    },
+    {
+      "source_path": "state/left_hand/joint_angle",
+      "slice_start": 0,
+      "slice_stop": 22,
+      "unit": "rad",
+      "semantics": "absolute_measured"
+    },
+    {
+      "source_path": "state/right_arm/joint_angle",
+      "slice_start": 0,
+      "slice_stop": 7,
+      "unit": "rad",
+      "semantics": "absolute_measured"
+    },
+    {
+      "source_path": "state/right_hand/joint_angle",
+      "slice_start": 0,
+      "slice_stop": 22,
+      "unit": "rad",
+      "semantics": "absolute_measured"
+    },
+    {
+      "source_path": "state/motor/joint_angle",
+      "slice_start": 0,
+      "slice_stop": 7,
+      "unit": "rad",
+      "semantics": "absolute_measured"
+    }
+  ],
+  "image_slots": [
+    {
+      "openpi_key": "base_0_rgb",
+      "sharpa_group": "observe/vision/head/stereo/lefteye",
+      "mask_when_present": true,
+      "resize_hw": null,
+      "crop_roi_xyxy": null
+    },
+    {
+      "openpi_key": "left_wrist_0_rgb",
+      "sharpa_group": "observe/vision/left_wrist/fisheye",
+      "mask_when_present": true,
+      "resize_hw": null,
+      "crop_roi_xyxy": null
+    },
+    {
+      "openpi_key": "right_wrist_0_rgb",
+      "sharpa_group": "observe/vision/right_wrist/fisheye",
+      "mask_when_present": true,
+      "resize_hw": null,
+      "crop_roi_xyxy": null
+    }
+  ],
+  "image_channel_order": "rgb",
+  "image_layout": "hwc",
+  "image_dtype_range": "uint8_0_255",
+  "unused_sharpa_vision_groups": [
+    "observe/vision/head/stereo/righteye"
+  ],
+  "prompt_policy": {
+    "source": "anno.json:tags.task_instruction",
+    "missing_policy": "reject",
+    "normalize_whitespace": true,
+    "annotation_interval_closed": true
+  },
+  "split_policy": {
+    "strategy": "episode_hash_stratified_by_task",
+    "train_fraction": 0.8,
+    "validation_fraction": 0.1,
+    "test_fraction": 0.1,
+    "seed": 0,
+    "dedupe_by_episode_id": true
+  },
+  "num_workers": 0,
+  "bad_sample_report_path": "outputs/bad_samples/joint_29d_k100_v0.jsonl"
+}

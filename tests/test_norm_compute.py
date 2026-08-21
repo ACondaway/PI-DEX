@@ -10,18 +10,18 @@ import h5py
 import numpy as np
 import pytest
 
-from pi_dex.actions import ActionRepresentation
-from pi_dex.norm_compute import compute_joint29d_normalization_stats
-from pi_dex.norm_compute import extract_episode_norm_batch
-from pi_dex.norm_compute import resolve_norm_workers
-from pi_dex.norm_compute import valid_aligned_starts
-from pi_dex.observation_contract import load_observation_contract
-from pi_dex.sharpa_data import derive_bimanual_logical_action_chunk
-from pi_dex.sharpa_dataset import _load_action_chunk
-from pi_dex.sharpa_dataset import _load_state
-from pi_dex.sharpa_dataset import build_sample_index
-from pi_dex.sharpa_dataset import discover_episodes
-from pi_dex.training_runner import build_joint_spec_from_contract
+from pi_dex.core.actions import ActionRepresentation
+from pi_dex.data.norm_compute import compute_joint29d_normalization_stats
+from pi_dex.data.norm_compute import extract_episode_norm_batch
+from pi_dex.data.norm_compute import resolve_norm_workers
+from pi_dex.data.norm_compute import valid_aligned_starts
+from pi_dex.data.observation_contract import load_observation_contract
+from pi_dex.data.sharpa_data import derive_bimanual_logical_action_chunk
+from pi_dex.data.sharpa_dataset import _load_action_chunk
+from pi_dex.data.sharpa_dataset import _load_state
+from pi_dex.data.sharpa_dataset import build_sample_index
+from pi_dex.data.sharpa_dataset import discover_episodes
+from pi_dex.training.training_runner import build_joint_spec_from_contract
 from tests.helpers import spec_for_representation
 from tests.test_sharpa_data import BASE_TIME_S
 from tests.test_sharpa_data import RAW_PERIOD_S
@@ -75,6 +75,7 @@ def test_valid_starts_match_per_window_probe(action_spec) -> None:
                 left_hand=groups[1],
                 right_arm=groups[2],
                 right_hand=groups[3],
+                motor=groups[4],
                 start_aligned_frame=start,
                 spec=spec,
                 kinematics=None,
@@ -99,6 +100,7 @@ def test_valid_starts_accept_one_skipped_raw_tick(action_spec) -> None:
             "action/left_hand/joint_angle",
             "action/right_arm/joint_angle",
             "action/right_hand/joint_angle",
+            "action/motor/joint_angle",
         )
     )
     patched = []
@@ -136,6 +138,7 @@ def _write_synthetic_episode(episode_dir: Path, *, aligned_length: int = 16, see
         "action/left_hand/joint_angle": 22,
         "action/right_arm/joint_angle": 7,
         "action/right_hand/joint_angle": 22,
+        "action/motor/joint_angle": 7,
     }
     state_fields = {
         "state/left_arm/joint_angle": 7,
@@ -227,7 +230,7 @@ def test_extract_matches_real_episode_index() -> None:
     assert batch is not None
     sample_index = build_sample_index(episodes, spec=spec, contract=contract, provenance=provenance)
     assert batch.state.shape[0] == len(sample_index)
-    assert batch.left_actions.shape == (len(sample_index), spec.physical_horizon, 29)
+    assert batch.left_actions.shape == (len(sample_index), spec.physical_horizon, spec.logical_action_dim)
     with h5py.File(episodes[0].hdf5_path, "r") as handle:
         for index in (0, min(7, len(sample_index) - 1)):
             sample_ref = sample_index[index]

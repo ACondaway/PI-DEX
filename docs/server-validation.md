@@ -13,7 +13,7 @@
 - policy 能产生动作不能证明动作的单位、坐标系、关节顺序、限位或硬件执行正确。
 - 多机 DDP 已实现（torchrun / 火山 MLP）；正式放行仍须按阶段 D 留证。FSDP / LoRA / AMP
   仍不在范围内。
-- 仓库提供 `pi-dex-train-pytorch` launcher 与 first-party `pi_dex.training_runner` /
+- 仓库提供 `pi-dex-train-pytorch` launcher 与 first-party `pi_dex.training.training_runner` /
   Sharpa `joint_29d` dataset；完整站点 WebSocket launcher、Sharpa SDK controller 租约和
   硬件急停仍未闭合。服务器和硬件测试必须使用经评审、纳入版本控制的接入程序。
 - 当前没有受控的 `pi05_base` JAX/Orbax→PyTorch converter wrapper/parity harness；原始上游
@@ -460,7 +460,7 @@ tokenizer 来源漂移。只完成模型加载但没有真实推理不得记为�
 ```bash
 # 单机双进程（CPU gloo 也可用于 loader/cursor 探针）
 torchrun --standalone --nproc-per-node=2 \
-  -m pi_dex.training_runner  # 或站点 distributed_probe / 短 max-steps train
+  -m pi_dex.training.training_runner  # 或站点 distributed_probe / 短 max-steps train
 ```
 
 火山引擎 MLP 入口（平台注入 ``MLP_*``）：
@@ -468,7 +468,7 @@ torchrun --standalone --nproc-per-node=2 \
 ```bash
 bash scripts/volc_ddp_train.sh -- \
   --action-representation joint_29d \
-  --runner pi_dex.training_runner:run -- \
+  --runner pi_dex.training.training_runner:run -- \
   --mode train ...
 # 或: pi-dex-volc-train -- --action-representation joint_29d ...
 ```

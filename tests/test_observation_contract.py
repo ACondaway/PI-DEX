@@ -9,17 +9,18 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from pi_dex.actions import ActionRepresentation
-from pi_dex.jpeg_eoi import trim_padded_jpeg
-from pi_dex.observation_contract import ReviewStatus
-from pi_dex.observation_contract import load_observation_contract
-from pi_dex.observation_contract import observation_contract_to_mapping
-from pi_dex.spec import ActionTimebase
+from pi_dex.core.actions import ActionRepresentation
+from pi_dex.weights.jpeg_eoi import trim_padded_jpeg
+from pi_dex.data.observation_contract import ReviewStatus
+from pi_dex.data.observation_contract import load_observation_contract
+from pi_dex.data.observation_contract import observation_contract_to_mapping
+from pi_dex.core.spec import ActionTimebase
 from tests.helpers import spec_for_representation
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 UNREVIEWED_CONTRACT = REPO_ROOT / "configs/site/joint_29d_observation.unreviewed.json"
 K50_CONTRACT = REPO_ROOT / "configs/site/joint_29d_observation.k50.reviewed.json"
+K100_CONTRACT = REPO_ROOT / "configs/site/joint_29d_observation.k100.reviewed.json"
 
 
 def test_trim_padded_jpeg_cuts_at_final_eoi_not_trailing_zeros() -> None:
@@ -90,3 +91,21 @@ def test_k50_reviewed_contract_is_fifty_physical_steps(action_spec) -> None:
     )
     contract.validate_against_action_spec(joint_spec)
     assert joint_spec.model_action_horizon == 100
+
+
+def test_k100_reviewed_contract_is_hundred_physical_steps(action_spec) -> None:
+    contract = load_observation_contract(K100_CONTRACT)
+    assert contract.review_status is ReviewStatus.REVIEWED
+    assert contract.physical_horizon == 100
+    contract.require_reviewed_for_training()
+    joint_spec = dataclasses.replace(
+        spec_for_representation(action_spec, ActionRepresentation.JOINT_29D),
+        physical_horizon=contract.physical_horizon,
+        timebase=ActionTimebase.RAW_CONTROL_60_HZ,
+        control_frequency_hz=contract.control_frequency_hz,
+        max_group_timestamp_skew_ms=contract.max_group_timestamp_skew_ms,
+        max_alignment_timestamp_error_ms=contract.max_alignment_timestamp_error_ms,
+        max_control_period_error_ms=contract.max_control_period_error_ms,
+    )
+    contract.validate_against_action_spec(joint_spec)
+    assert joint_spec.model_action_horizon == 200

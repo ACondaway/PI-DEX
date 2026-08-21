@@ -168,7 +168,7 @@ mkdir -p "$(dirname "${CHECKPOINT_DIR}")" "$(dirname "${OUTPUT_JSON}")" "${PI_DE
 
 TRAIN_ARGS=(
   --action-representation joint_29d
-  --runner pi_dex.training_runner:run
+  --runner pi_dex.training.training_runner:run
   --
   --mode train
   --observation-contract "${CONTRACT}"

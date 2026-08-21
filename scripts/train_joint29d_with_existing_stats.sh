@@ -114,7 +114,7 @@ echo "  MAX_STEPS=${MAX_STEPS} BATCH_SIZE=${BATCH_SIZE}"
 
 pi-dex-train-pytorch \
   --action-representation joint_29d \
-  --runner pi_dex.training_runner:run -- \
+  --runner pi_dex.training.training_runner:run -- \
   --mode train \
   --observation-contract "${CONTRACT}" \
   --dataset-root "${DATASET_ROOT}" \

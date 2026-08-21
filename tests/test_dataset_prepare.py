@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 import pathlib
 
-from pi_dex.dataset_prepare import materialize_prepared_dataset
-from pi_dex.sharpa_dataset import discover_episodes
+from pi_dex.data.dataset_prepare import materialize_prepared_dataset
+from pi_dex.data.sharpa_dataset import discover_episodes
 
 
 def _write_fake_episode(root: pathlib.Path, season: str, episode: str, prompt: str) -> None:

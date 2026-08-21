@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Thin executable wrapper for the installed PI-DEX PyTorch launcher."""
 
-from pi_dex.training_launcher import main
+from pi_dex.training.training_launcher import main
 
 
 if __name__ == "__main__":

@@ -124,7 +124,7 @@ if [[ ${#USER_ARGS[@]} -eq 0 ]]; then
 
   TRAIN_ARGS=(
     --action-representation joint_29d
-    --runner pi_dex.training_runner:run
+    --runner pi_dex.training.training_runner:run
     --
     --mode compute-norm-stats
     --observation-contract "${CONTRACT}"
@@ -160,7 +160,7 @@ echo "  action_mode=${ACTION_MODE} asset=${ASSET_ID}"
 echo "  norm_workers=${NORM_WORKERS:-<auto>} stride=${NORM_STRIDE} OMP_NUM_THREADS=${OMP_NUM_THREADS}"
 
 if [[ -z "${TRAIN_BIN}" ]]; then
-  LAUNCH=("${PYTHON_BIN}" -m pi_dex.training_launcher)
+  LAUNCH=("${PYTHON_BIN}" -m pi_dex.training.training_launcher)
 else
   LAUNCH=("${TRAIN_BIN}")
 fi

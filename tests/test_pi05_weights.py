@@ -8,9 +8,9 @@ import pytest
 import torch
 from torch import nn
 
-from pi_dex.pi05_weights import file_sha256
-from pi_dex.pi05_weights import load_verified_pi05_base
-from pi_dex.pi05_weights import require_converted_base_dir
+from pi_dex.weights.pi05_weights import file_sha256
+from pi_dex.weights.pi05_weights import load_verified_pi05_base
+from pi_dex.weights.pi05_weights import require_converted_base_dir
 
 
 class _TinyConfig:

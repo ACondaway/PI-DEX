@@ -91,37 +91,34 @@ bash scripts/setup_inference_env.sh --torch-cuda cpu
 
 ---
 
-## 4. Profile：GPU serve vs 从端桥
+## 4. Profile：GPU 机（serve + 桥都在这里）
+
+站点约定：**所有 PI-DEX 进程只跑在 GPU 推理机**；从端 NUC 只跑 Sharpa 机器人栈。
 
 | Profile | 命令 | 说明 |
 |---------|------|------|
-| `gpu-serve`（默认） | `bash scripts/setup_inference_env.sh` | 装完整 lock + CUDA torch，跑 `pi-dex-serve` |
-| `robot-client` | `bash scripts/setup_inference_env.sh --profile robot-client` | 默认 CPU torch + `eclipse-zenoh`，跑 `pi-dex-robot-client` |
-| `full` | `--profile full` | 与 gpu-serve 相同安装面，可再加 `--with-zenoh` |
+| `gpu-serve`（默认） | `bash scripts/setup_inference_env.sh --with-zenoh` | CUDA torch + lock + `eclipse-zenoh`；同机跑 `pi-dex-serve` 与 `pi-dex-robot-client` |
+| `full` | `--profile full --with-zenoh` | 同上完整面 |
 
-从端机器人栈本身仍用 Sharpa 的 `start.sh` / `start-nuc.sh` / `start-remote-orin.sh`；
-本环境只服务 PI-DEX 桥与 GPU 推理，**不替代**机器人启动脚本。
+从端仍用 Sharpa 的 `start.sh` / `start-nuc.sh` / `start-remote-orin.sh`；
+**不要**在 NUC 上安装或启动 `pi-dex-*`。
 
 ---
 
 ## 5. 部署拓扑与启动顺序
 
 ```text
-从端 NUC (+ Orin)          GPU 推理机              Pendant
-─────────────────          ───────────              ───────
-bash start.sh              pi-dex-serve
-pi-dex-robot-client  ←WS→  (checkpoint)
-       │ Zenoh
-       ▼
-north_observation → inference/action
-                                              F6 推理模式
-                                              F2 moving
+从端 NUC (+ Orin)              GPU 推理机                         Pendant
+─────────────────              ───────────                         ───────
+bash start.sh                  pi-dex-serve  (WS 127.0.0.1)
+  Zenoh domain ◄─────────────► pi-dex-robot-client
+                               (OpenPI Runtime + ActionChunkBroker)
+                                                      F6 推理 / F2 moving
 ```
 
-1. 从端：`bash start.sh`（或拆开的 nuc / orin 脚本）
-2. GPU：环境就绪后启动 serve
-3. 从端：启动 Zenoh 桥（需与机器人同 Zenoh 域；已装 `eclipse-zenoh`）
-4. Pendant：`F6` → 推理，`F2` → moving（人盯急停）
+1. 从端：`bash start.sh`（仅机器人栈）
+2. GPU：一键 `bash scripts/run_robot_joint29d.sh ...`（后台 serve + 前台桥；或分步起 serve / robot-client）
+3. Pendant：`F6` → 推理，`F2` → moving（人盯急停）
 
 ### 5.0 从训练制品导出推理包（开发机）
 
@@ -161,22 +158,31 @@ pi-dex-serve-probe --host 127.0.0.1 --port 8000
 
 跨机时注意防火墙与可选 `--api-key`；生产前仍需按 [server-validation.md](server-validation.md) 补 TLS/认证评审。
 
-### 5.2 从端：Zenoh 桥
+### 5.2 GPU：推理桥（OpenPI Runtime + North Zenoh，与 serve 同机）
+
+- **OpenPI**：`Runtime(max_hz)` + `PolicyAgent` + `ActionChunkBroker`
+- **North I/O**：`NorthZmqEnv` 经 Zenoh 连机器人域（收 `north_observation`，发 `inference/action`）
+- **Policy**：本机 Websocket → `pi-dex-serve`（`--serve-host 127.0.0.1`）
 
 ```bash
 conda activate pi-dex
 
-# 离线编解码自检（无需 Zenoh / GPU）
 pi-dex-robot-client --mode codec-smoke
 
-bash scripts/robot_client_joint29d.sh \
-  --serve-host <GPU_IP> \
-  --serve-port 8000 \
+# 推荐：同机一键起 serve + 桥
+bash scripts/run_robot_joint29d.sh \
+  --checkpoint-dir <ckpt> \
+  --assets-dir <assets> \
+  --asset-id sharpa_joint_29d_insert_battery_k50_delta \
+  --contract configs/site/joint_29d_observation.k50.reviewed.json \
+  --action-mode delta \
+  --output-chunk 50 \
+  --offset 6 \
   --prompt "insert the battery"
+  # 可选：--zenoh-config /path/to/robot_zenoh.json5
 ```
 
-默认 topic：`north_observation` → `inference/action`（与 `examples/sharpa_north_sdk.py` 一致）。
-编解码：`pi_dex.north_codec` / `pi_dex.north_pb2`（schema：`examples/north.proto`）。
+模块：`pi_dex.robot`。默认 topic：`north_observation` → `inference/action`。
 
 ---
 
@@ -205,7 +211,8 @@ pi-dex-serve-probe --host 127.0.0.1 --port 8000
 | `scripts/export_inference_lock.sh` | 开发机导出 lock |
 | `scripts/export_inference_bundle.sh` | 从训练 step 抽出推理包（权重 + tokenizer + contract） |
 | `scripts/serve_joint29d.sh` | GPU serve 包装 |
-| `scripts/robot_client_joint29d.sh` | 从端桥包装 |
+| `scripts/run_robot_joint29d.sh` | GPU 一键：serve + robot-client |
+| `scripts/robot_client_joint29d.sh` | 仅推理桥（serve 已另起时用） |
 | [pytorch.md](pytorch.md) §6 | 协议与 wire 细节 |
 | [training.md](training.md) | 训练与 checkpoint |
 | [server-validation.md](server-validation.md) | 验收留证 |

@@ -6,11 +6,11 @@ from collections.abc import Callable
 
 import pytest
 
-import pi_dex.training_launcher as training_launcher
-from pi_dex.actions import ActionRepresentation
-from pi_dex.spec import BimanualActionSpec
-from pi_dex.training_launcher import PytorchTrainingLaunchContext
-from pi_dex.training_launcher import main
+import pi_dex.training.training_launcher as training_launcher
+from pi_dex.core.actions import ActionRepresentation
+from pi_dex.core.spec import BimanualActionSpec
+from pi_dex.training.training_launcher import PytorchTrainingLaunchContext
+from pi_dex.training.training_launcher import main
 from tests.helpers import spec_for_representation
 
 
@@ -194,7 +194,7 @@ def test_joint_launch_does_not_load_or_create_fk(
     assert exit_code == 9
     assert import_calls == ["runner_module"]
     assert context.action_representation is ActionRepresentation.JOINT_29D
-    assert context.logical_action_dim == 29
+    assert context.logical_action_dim == 36
     assert context.requires_forward_kinematics is False
     assert context.action_spec == joint_spec
     assert context.runner_args == ()

@@ -3,12 +3,12 @@ import dataclasses
 import numpy as np
 import pytest
 
-from pi_dex.actions import ActionRepresentation
-from pi_dex.normalization import normalization_stats_fingerprint
-from pi_dex.normalization import normalization_state_dim
-from pi_dex.normalization import validate_normalization_stats
-from pi_dex.spec import BimanualActionSpec
-from pi_dex.spec import HandNormalization
+from pi_dex.core.actions import ActionRepresentation
+from pi_dex.core.normalization import normalization_stats_fingerprint
+from pi_dex.core.normalization import normalization_state_dim
+from pi_dex.core.normalization import validate_normalization_stats
+from pi_dex.core.spec import BimanualActionSpec
+from pi_dex.core.spec import HandNormalization
 from tests.helpers import spec_for_representation
 
 

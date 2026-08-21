@@ -63,7 +63,7 @@ fi
 
 pi-dex-train-pytorch \
   --action-representation joint_29d \
-  --runner pi_dex.training_runner:run -- \
+  --runner pi_dex.training.training_runner:run -- \
   --mode compute-norm-stats \
   --observation-contract "${CONTRACT}" \
   --dataset-root "${OPENDATA_ROOT}" \

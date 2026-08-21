@@ -8,12 +8,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from pi_dex.actions import ActionRepresentation
-from pi_dex.observation_contract import load_observation_contract
-from pi_dex.sharpa_dataset import SyntheticJoint29dDataset
-from pi_dex.training_launcher import PytorchTrainingLaunchContext
-from pi_dex.training_runner import build_joint_spec_from_contract
-from pi_dex.training_runner import run
+from pi_dex.core.actions import ActionRepresentation
+from pi_dex.data.observation_contract import load_observation_contract
+from pi_dex.data.sharpa_dataset import SyntheticJoint29dDataset
+from pi_dex.training.training_launcher import PytorchTrainingLaunchContext
+from pi_dex.training.training_runner import build_joint_spec_from_contract
+from pi_dex.training.training_runner import run
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONTRACT = REPO_ROOT / "configs/site/joint_29d_observation.unreviewed.json"
@@ -31,8 +31,8 @@ def test_synthetic_joint_dataset_shapes() -> None:
     )
     sample = dataset[1]
     assert sample["state"].shape == (contract.state_dim,)
-    assert sample["left_actions"].shape == (contract.physical_horizon, 29)
-    assert sample["right_actions"].shape == (contract.physical_horizon, 29)
+    assert sample["left_actions"].shape == (contract.physical_horizon, 36)
+    assert sample["right_actions"].shape == (contract.physical_horizon, 36)
     assert sample["image"]["base_0_rgb"].dtype == np.uint8
 
 
@@ -54,7 +54,7 @@ def test_runner_synthetic_smoke(tmp_path: Path) -> None:
     assert run(context) == 0
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["mode"] == "synthetic-smoke"
-    assert payload["logical_action_dim"] == 29
+    assert payload["logical_action_dim"] == 36
 
 
 @pytest.mark.skipif(not REAL_EPISODE_ROOT.is_dir(), reason="SharpaOpenData not mounted")
@@ -80,7 +80,7 @@ def test_runner_validate_one_real_season(tmp_path: Path) -> None:
     )
     assert run(context) == 0
     payload = json.loads(output.read_text(encoding="utf-8"))
-    assert payload["sample0"]["left_actions_shape"] == [8, 29]
+    assert payload["sample0"]["left_actions_shape"] == [8, 36]
     assert payload["sample0"]["state_shape"] == [65]
 
 

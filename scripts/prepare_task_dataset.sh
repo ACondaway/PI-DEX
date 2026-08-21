@@ -109,7 +109,7 @@ if [[ "${OVERWRITE_PREPARED}" == "1" ]]; then
   OVERWRITE_FLAG=(--overwrite)
 fi
 
-python -m pi_dex.dataset_prepare \
+python -m pi_dex.data.dataset_prepare \
   --source-root "${SOURCE_ROOT}" \
   --prepared-root "${PREPARED_ROOT}" \
   --default-prompt "${DEFAULT_PROMPT}" \
@@ -138,7 +138,7 @@ if [[ -n "${NORM_WORKERS}" ]]; then
 fi
 pi-dex-train-pytorch \
   --action-representation joint_29d \
-  --runner pi_dex.training_runner:run -- \
+  --runner pi_dex.training.training_runner:run -- \
   --mode compute-norm-stats \
   --observation-contract "${CONTRACT}" \
   --dataset-root "${PREPARED_ROOT}" \

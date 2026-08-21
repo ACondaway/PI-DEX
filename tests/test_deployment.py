@@ -7,23 +7,23 @@ from collections.abc import Mapping
 import numpy as np
 import pytest
 
-from pi_dex.actions import JOINT_LOGICAL_ACTION_DIM
-from pi_dex.actions import LOGICAL_ACTION_DIM
-from pi_dex.actions import MODEL_ACTION_DIM
-from pi_dex.actions import ActionRepresentation
-from pi_dex.deployment import BimanualActionChunkBroker
-from pi_dex.deployment import BimanualBrokerFault
-from pi_dex.deployment import BimanualCommandDispatcher
-from pi_dex.deployment import BimanualDispatchError
-from pi_dex.deployment import BimanualHoldReceipt
-from pi_dex.deployment import BimanualPolicyAdapter
-from pi_dex.deployment import BimanualSafetyLimits
-from pi_dex.deployment import CHUNK_STEP_INDEX_FIELD
-from pi_dex.deployment import DEPLOYMENT_WIRE_FORMAT
-from pi_dex.deployment import SESSION_ID_FIELD
-from pi_dex.deployment import validate_deployment_metadata
-from pi_dex.deployment import validate_execution_horizon
-from pi_dex.spec import BimanualActionSpec
+from pi_dex.core.actions import JOINT_LOGICAL_ACTION_DIM
+from pi_dex.core.actions import LOGICAL_ACTION_DIM
+from pi_dex.core.actions import MODEL_ACTION_DIM
+from pi_dex.core.actions import ActionRepresentation
+from pi_dex.serve.deployment import BimanualActionChunkBroker
+from pi_dex.serve.deployment import BimanualBrokerFault
+from pi_dex.serve.deployment import BimanualCommandDispatcher
+from pi_dex.serve.deployment import BimanualDispatchError
+from pi_dex.serve.deployment import BimanualHoldReceipt
+from pi_dex.serve.deployment import BimanualPolicyAdapter
+from pi_dex.serve.deployment import BimanualSafetyLimits
+from pi_dex.serve.deployment import CHUNK_STEP_INDEX_FIELD
+from pi_dex.serve.deployment import DEPLOYMENT_WIRE_FORMAT
+from pi_dex.serve.deployment import SESSION_ID_FIELD
+from pi_dex.serve.deployment import validate_deployment_metadata
+from pi_dex.serve.deployment import validate_execution_horizon
+from pi_dex.core.spec import BimanualActionSpec
 from tests.helpers import spec_for_representation
 
 CLOCK_DOMAIN = "unix_realtime"
@@ -354,7 +354,7 @@ def test_joint_safety_limits_require_29d_vectors(action_spec: BimanualActionSpec
     limits = BimanualSafetyLimits(joint_spec, valid, valid, valid, valid)
 
     assert limits.left_min.shape == (JOINT_LOGICAL_ACTION_DIM,)
-    with pytest.raises(ValueError, match=r"expected \(29,\)"):
+    with pytest.raises(ValueError, match=r"expected \(36,\)"):
         BimanualSafetyLimits(joint_spec, wrong, valid, valid, valid)
 
 
@@ -1661,7 +1661,10 @@ def test_dispatcher_rejects_controller_recovery_epoch_change(action_spec: Bimanu
     dispatcher = make_dispatcher(action_spec, controller)
     controller.recover()
 
-    with pytest.raises(BimanualDispatchError, match=r"recovery_epoch changed.*safe hold also failed"):
+    with pytest.raises(
+        BimanualDispatchError,
+        match=r"safe hold also failed:.*controller recovery epoch mismatch",
+    ):
         dispatcher.dispatch(
             make_step_result(),
             target_timestamp_ns=TARGET_TIMESTAMP_NS,

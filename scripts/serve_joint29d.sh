@@ -24,6 +24,7 @@ cd "${ROOT}"
 : "${ROBOT_ID:=POC22005}"
 : "${CHECKPOINT_DIR:=}"
 : "${API_KEY:=}"
+: "${ACTION_MODE:=absolute}"
 : "${SKIP_CONDA:=0}"
 
 if [[ "${SKIP_CONDA}" != "1" && -f "${CONDA_ROOT}/etc/profile.d/conda.sh" ]]; then
@@ -43,6 +44,7 @@ while [[ $# -gt 0 ]]; do
     --port) PORT="$2"; shift 2 ;;
     --contract) CONTRACT="$2"; shift 2 ;;
     --api-key) API_KEY="$2"; shift 2 ;;
+    --action-mode) ACTION_MODE="$2"; shift 2 ;;
     --)
       shift
       EXTRA+=("$@")
@@ -68,6 +70,7 @@ ARGS=(
   --robot-id "${ROBOT_ID}"
   --host "${HOST}"
   --port "${PORT}"
+  --action-mode "${ACTION_MODE}"
 )
 if [[ -n "${API_KEY}" ]]; then
   ARGS+=(--api-key "${API_KEY}")
@@ -75,5 +78,5 @@ fi
 
 echo "[$(date -Is)] pi-dex-serve ${HOST}:${PORT}"
 echo "  checkpoint=${CHECKPOINT_DIR}"
-echo "  assets=${ASSETS_DIR}/${ASSET_ID}"
+echo "  assets=${ASSETS_DIR}/${ASSET_ID} action_mode=${ACTION_MODE}"
 exec pi-dex-serve "${ARGS[@]}" "${EXTRA[@]}"

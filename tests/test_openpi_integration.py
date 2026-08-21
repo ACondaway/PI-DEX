@@ -6,20 +6,21 @@ import types
 import numpy as np
 import pytest
 
-import pi_dex.openpi_integration as openpi_integration
-from pi_dex.actions import ActionRepresentation
-from pi_dex.openpi_integration import BimanualDataConfigFactory
-from pi_dex.openpi_integration import compute_bimanual_normalization_stats
-from pi_dex.openpi_integration import configure_bimanual_data
-from pi_dex.openpi_integration import configure_bimanual_train_config
-from pi_dex.openpi_integration import create_bimanual_trained_policy
-from pi_dex.openpi_integration import create_pi05_model_config
-from pi_dex.openpi_integration import create_pytorch_data_loader_from_dataset
-from pi_dex.openpi_transforms import PackBimanualActions
-from pi_dex.openpi_transforms import UnpackBimanualActions
-from pi_dex.openpi_transforms import ValidateBimanualSample
-from pi_dex.spec import BimanualActionSpec
-from pi_dex.spec import HandNormalization
+import pi_dex.training.openpi_integration as openpi_integration
+from pi_dex.core.actions import MODEL_ACTION_DIM
+from pi_dex.core.actions import ActionRepresentation
+from pi_dex.training.openpi_integration import BimanualDataConfigFactory
+from pi_dex.training.openpi_integration import compute_bimanual_normalization_stats
+from pi_dex.training.openpi_integration import configure_bimanual_data
+from pi_dex.training.openpi_integration import configure_bimanual_train_config
+from pi_dex.training.openpi_integration import create_bimanual_trained_policy
+from pi_dex.training.openpi_integration import create_pi05_model_config
+from pi_dex.training.openpi_integration import create_pytorch_data_loader_from_dataset
+from pi_dex.training.openpi_transforms import PackBimanualActions
+from pi_dex.training.openpi_transforms import UnpackBimanualActions
+from pi_dex.training.openpi_transforms import ValidateBimanualSample
+from pi_dex.core.spec import BimanualActionSpec
+from pi_dex.core.spec import HandNormalization
 from tests.helpers import spec_for_representation
 
 
@@ -101,7 +102,7 @@ class FakeTrainConfig:
 def make_model_config(**overrides: object) -> object:
     values: dict[str, object] = {
         "pi05": True,
-        "action_dim": 32,
+        "action_dim": MODEL_ACTION_DIM,
         "action_horizon": 4,
         "dtype": "bfloat16",
         "paligemma_variant": "gemma_2b",
@@ -152,7 +153,7 @@ def test_create_pi05_model_config_builds_validated_config_before_openpi_use(
     assert model_config.dtype == "float32"
     assert model_config.paligemma_variant == "gemma_2b_lora"
     assert model_config.action_expert_variant == "gemma_300m_lora"
-    assert model_config.action_dim == 32
+    assert model_config.action_dim == MODEL_ACTION_DIM
     assert model_config.action_horizon == action_spec.model_action_horizon
     assert model_config.max_token_len == 128
     assert model_config.pi05 is True
@@ -288,7 +289,7 @@ def test_configure_train_config_requires_a_dataclass_instance(
     action_spec: BimanualActionSpec,
 ) -> None:
     train_config = types.SimpleNamespace(
-        model=types.SimpleNamespace(pi05=True, action_dim=32, action_horizon=4),
+        model=types.SimpleNamespace(pi05=True, action_dim=MODEL_ACTION_DIM, action_horizon=4),
         data=FakeDataFactory(),
         policy_metadata=None,
     )
@@ -458,7 +459,7 @@ def install_fake_openpi(monkeypatch, validation_calls: list[tuple[object, object
     transforms_module.compose = lambda transforms: lambda sample: _apply_transforms(transforms, sample)
     normalize_module = types.ModuleType("openpi.shared.normalize")
     normalize_module.RunningStats = FakeRunningStats
-    pi_dex_normalization_module = types.ModuleType("pi_dex.normalization")
+    pi_dex_normalization_module = types.ModuleType("pi_dex.core.normalization")
 
     def validate_normalization_stats(stats, spec, *, require_state=False) -> None:
         if validation_calls is not None:
@@ -474,7 +475,7 @@ def install_fake_openpi(monkeypatch, validation_calls: list[tuple[object, object
     monkeypatch.setitem(sys.modules, "openpi.transforms", transforms_module)
     monkeypatch.setitem(sys.modules, "openpi.shared", shared_module)
     monkeypatch.setitem(sys.modules, "openpi.shared.normalize", normalize_module)
-    monkeypatch.setitem(sys.modules, "pi_dex.normalization", pi_dex_normalization_module)
+    monkeypatch.setitem(sys.modules, "pi_dex.core.normalization", pi_dex_normalization_module)
 
 
 def _apply_transforms(transforms, sample):
@@ -965,7 +966,7 @@ def test_create_trained_policy_requires_quantiles_then_validates_checkpoint_stat
     openpi_module.shared = shared_module
     openpi_module.training = training_module
 
-    normalization_module = types.ModuleType("pi_dex.normalization")
+    normalization_module = types.ModuleType("pi_dex.core.normalization")
 
     def validate_normalization_stats(stats, spec, *, require_state=False) -> None:
         captured["validated_stats"] = stats
@@ -980,13 +981,31 @@ def test_create_trained_policy_requires_quantiles_then_validates_checkpoint_stat
     normalization_module.validate_normalization_stats = validate_normalization_stats
     normalization_module.normalization_state_dim = normalization_state_dim
 
-    pytorch_training_module = types.ModuleType("pi_dex.pytorch_training")
+    import pi_dex.weights.pi05_weights as pi05_weights
+
+    def materialize_expanded_checkpoint_weights(weight_path: pathlib.Path) -> bool:
+        captured["materialized_weight_path"] = weight_path
+        return False
+
+    monkeypatch.setattr(
+        pi05_weights,
+        "materialize_expanded_checkpoint_weights",
+        materialize_expanded_checkpoint_weights,
+    )
+
+    pytorch_training_module = types.ModuleType("pi_dex.training.pytorch_training")
 
     def neutralize_model(model, spec) -> None:
         captured["neutralized_model"] = model
         captured["neutralized_spec"] = spec
 
+    def expand_action_projections_from_pretrained(*args, **kwargs) -> None:
+        captured["expanded_action_projections"] = True
+
     pytorch_training_module.neutralize_openpi_dense_action_io = neutralize_model
+    pytorch_training_module.expand_action_projections_from_pretrained = (
+        expand_action_projections_from_pretrained
+    )
 
     monkeypatch.setitem(sys.modules, "openpi", openpi_module)
     monkeypatch.setitem(sys.modules, "openpi.policies", policies_module)
@@ -995,8 +1014,8 @@ def test_create_trained_policy_requires_quantiles_then_validates_checkpoint_stat
     monkeypatch.setitem(sys.modules, "openpi.shared.download", download_module)
     monkeypatch.setitem(sys.modules, "openpi.training", training_module)
     monkeypatch.setitem(sys.modules, "openpi.training.checkpoints", checkpoints_module)
-    monkeypatch.setitem(sys.modules, "pi_dex.normalization", normalization_module)
-    monkeypatch.setitem(sys.modules, "pi_dex.pytorch_training", pytorch_training_module)
+    monkeypatch.setitem(sys.modules, "pi_dex.core.normalization", normalization_module)
+    monkeypatch.setitem(sys.modules, "pi_dex.training.pytorch_training", pytorch_training_module)
 
     def validate_contract(
         checkpoint_dir: pathlib.Path,

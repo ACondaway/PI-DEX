@@ -5,11 +5,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from pi_dex.episode_split import SplitName
-from pi_dex.episode_split import assign_episode_splits
-from pi_dex.episode_split import filter_episodes_for_split
-from pi_dex.observation_contract import load_observation_contract
-from pi_dex.sharpa_dataset import EpisodeRef
+from pi_dex.data.episode_split import SplitName
+from pi_dex.data.episode_split import assign_episode_splits
+from pi_dex.data.episode_split import filter_episodes_for_split
+from pi_dex.data.observation_contract import load_observation_contract
+from pi_dex.data.sharpa_dataset import EpisodeRef
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 REVIEWED = REPO_ROOT / "configs/site/joint_29d_observation.reviewed.json"
@@ -43,7 +43,7 @@ def test_hash_split_is_deterministic_and_covers_all_splits(tmp_path: Path) -> No
 
 
 def test_empty_task_instruction_is_rejected_from_splits(tmp_path: Path) -> None:
-    from pi_dex.episode_split import list_split_rejects
+    from pi_dex.data.episode_split import list_split_rejects
 
     contract = load_observation_contract(REVIEWED)
     good = _episode(tmp_path, "good", "Wipe the plate")

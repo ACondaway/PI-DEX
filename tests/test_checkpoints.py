@@ -5,13 +5,14 @@ import types
 import numpy as np
 import pytest
 
-from pi_dex.actions import ActionRepresentation
-from pi_dex.checkpoints import load_and_validate_training_contract
-from pi_dex.checkpoints import save_training_contract
-from pi_dex.checkpoints import validate_normalization_asset_id
-from pi_dex.normalization import NORMALIZATION_FINGERPRINT_ALGORITHM
-from pi_dex.normalization import normalization_stats_fingerprint
-from pi_dex.spec import BimanualActionSpec
+from pi_dex.core.actions import MODEL_ACTION_DIM
+from pi_dex.core.actions import ActionRepresentation
+from pi_dex.training.checkpoints import load_and_validate_training_contract
+from pi_dex.training.checkpoints import save_training_contract
+from pi_dex.training.checkpoints import validate_normalization_asset_id
+from pi_dex.core.normalization import NORMALIZATION_FINGERPRINT_ALGORITHM
+from pi_dex.core.normalization import normalization_stats_fingerprint
+from pi_dex.core.spec import BimanualActionSpec
 from tests.helpers import spec_for_representation
 
 ASSET_ID = "sharpa_north_train_v1"
@@ -20,7 +21,7 @@ ASSET_ID = "sharpa_north_train_v1"
 def make_model_config(**overrides: object) -> object:
     values: dict[str, object] = {
         "pi05": True,
-        "action_dim": 32,
+        "action_dim": MODEL_ACTION_DIM,
         "action_horizon": 4,
         "dtype": "bfloat16",
         "paligemma_variant": "gemma_2b",
@@ -203,7 +204,7 @@ def test_training_contract_rejects_resume_with_different_action_representation(
     stage_training_contract(tmp_path, action_spec)
     joint_spec = spec_for_representation(action_spec, ActionRepresentation.JOINT_29D)
 
-    with pytest.raises(ValueError, match="action_representation"):
+    with pytest.raises(ValueError, match="action_representation|joint_includes_duplicated_motor"):
         load_training_contract(
             tmp_path,
             joint_spec,

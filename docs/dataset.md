@@ -18,7 +18,7 @@ normalization stats。训练命令细节见 [training.md](training.md)；单 epi
 --dataset-root /mnt/netdata/Team/Academic/Data/North/SharpaOpenData
 ```
 
-`pi_dex.sharpa_dataset.discover_episodes` 会对 root 做 `rglob("anno.json")`，因此：
+`pi_dex.data.sharpa_dataset.discover_episodes` 会对 root 做 `rglob("anno.json")`，因此：
 
 | 布局 | 是否覆盖 |
 |------|----------|
@@ -174,7 +174,7 @@ pi-dex-dataset-inventory \
 也可用 Python：
 
 ```python
-from pi_dex.dataset_inventory import inventory_dataset
+from pi_dex.data.dataset_inventory import inventory_dataset
 payload = inventory_dataset(
     dataset_root="/mnt/netdata/Team/Academic/Data/North/SharpaOpenData",
     observation_contract="configs/site/joint_29d_observation.reviewed.json",
@@ -191,7 +191,7 @@ print(payload["episode_count"], payload["task_count"], payload["split_counts"])
 ```bash
 pi-dex-train-pytorch \
   --action-representation joint_29d \
-  --runner pi_dex.training_runner:run -- \
+  --runner pi_dex.training.training_runner:run -- \
   --mode validate-data \
   --observation-contract "${CONTRACT}" \
   --dataset-root "${OPENDATA_ROOT}" \
@@ -214,7 +214,7 @@ mkdir -p "${PI_DEX_ARTIFACTS}/logs" "${PI_DEX_ARTIFACTS}/dataset"
 
 nohup pi-dex-train-pytorch \
   --action-representation joint_29d \
-  --runner pi_dex.training_runner:run -- \
+  --runner pi_dex.training.training_runner:run -- \
   --mode validate-data \
   --observation-contract "${CONTRACT}" \
   --dataset-root "${OPENDATA_ROOT}" \
@@ -293,7 +293,7 @@ mkdir -p "${ASSETS_DIR}"
 
 nohup pi-dex-train-pytorch \
   --action-representation joint_29d \
-  --runner pi_dex.training_runner:run -- \
+  --runner pi_dex.training.training_runner:run -- \
   --mode compute-norm-stats \
   --observation-contract "${CONTRACT}" \
   --dataset-root "${OPENDATA_ROOT}" \
@@ -341,7 +341,7 @@ export CKPT="${PI_DEX_ARTIFACTS}/runs/opendata-joint29d-$(date +%Y%m%d)"
 
 pi-dex-train-pytorch \
   --action-representation joint_29d \
-  --runner pi_dex.training_runner:run -- \
+  --runner pi_dex.training.training_runner:run -- \
   --mode train \
   --observation-contract "${CONTRACT}" \
   --dataset-root "${OPENDATA_ROOT}" \
